@@ -307,7 +307,6 @@ async def health():
     image=web_image,
     volumes={"/data": volume},
     secrets=[modal.Secret.from_name("alethia-secrets")],
-    allow_concurrent_inputs=100,
 )
 @modal.asgi_app()
 def serve():

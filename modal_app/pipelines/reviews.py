@@ -187,7 +187,6 @@ def _compute_review_velocity(docs: list[dict]) -> None:
     image=base_image,
     volumes={"/data": volume},
     secrets=[modal.Secret.from_name("alethia-secrets")],
-    schedule=modal.Period(days=1),
     timeout=300,
 )
 async def review_ingester():

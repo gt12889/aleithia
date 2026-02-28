@@ -163,7 +163,6 @@ async def _extract_pdf_text(pdf_url: str) -> str:
 @app.function(
     image=politics_image,
     volumes={"/data": volume},
-    schedule=modal.Period(days=1),
     timeout=300,
     retries=modal.Retries(max_retries=2, backoff_coefficient=2.0),
 )

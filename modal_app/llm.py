@@ -25,11 +25,11 @@ When answering questions:
 
 
 @app.cls(
-    gpu=modal.gpu.H100(),
+    gpu="H100",
     image=vllm_image,
     volumes={VOLUME_MOUNT: volume, WEIGHTS_MOUNT: weights_volume},
     secrets=[modal.Secret.from_name("alethia-secrets")],
-    container_idle_timeout=300,
+    scaledown_window=300,
     timeout=600,
 )
 @modal.concurrent(max_inputs=20)

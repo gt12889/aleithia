@@ -145,7 +145,6 @@ async def _fetch_federal_register_fallback() -> list[dict]:
 @app.function(
     image=base_image,
     volumes={"/data": volume},
-    schedule=modal.Period(days=1),
     timeout=300,
     retries=modal.Retries(max_retries=2, backoff_coefficient=2.0),
 )
