@@ -7,6 +7,12 @@ interface Props {
   onGetStarted: () => void
 }
 
+function makeStatic(app: Application) {
+  const a = app as Record<string, any>
+  a._eventManager?.deactivate()
+  app.canvas.style.pointerEvents = 'none'
+}
+
 function tuneScene(app: Application) {
   const a = app as Record<string, any>
   const scene = a._scene
