@@ -145,12 +145,12 @@ modal app list
 | Local News | NewsAPI, RSS (Chicago Tribune, Block Club Chicago) | 30 min | `news_ingester` |
 | City Council | Chicago Legistar API | Daily | `politics_ingester` |
 | Meeting Transcripts | Zoning Board, Plan Commission PDFs | Daily | `pdf_processor` |
-| Reddit | asyncpraw (r/chicago, r/chicagofood, neighborhood subs) | Hourly | `reddit_ingester` |
+| Reddit | asyncpraw (r/chicago, r/chicagofood, r/ChicagoNWside, r/SouthSideChicago) | Hourly | `reddit_ingester` |
 | Yelp | Yelp Fusion API | Daily | `review_ingester` |
 | Google Places | Places API | Daily | `review_ingester` |
 | City Data Portal | Socrata API (data.cityofchicago.org) | Daily | `public_data_ingester` |
-| Census/ACS | Census API | Monthly | `demographics_ingester` |
-| Real Estate | LoopNet scrape | Weekly | `realestate_ingester` |
+| Census/ACS | Census API | Quarterly/Monthly | `demographics_ingester` |
+| Real Estate | CoStar API / LoopNet scrape | Weekly | `realestate_ingester` |
 
 ## Storage
 

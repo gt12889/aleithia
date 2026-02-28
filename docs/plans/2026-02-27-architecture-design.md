@@ -18,9 +18,10 @@ Build an AI-powered regulatory intelligence platform that aggregates live Chicag
 | Sponsor | Supermemory | Meta RayBans each |
 | Sponsor | OpenAI | $5K API credits each |
 | Sponsor | Cloudflare | $5K credits each |
+| Sponsor (stretch) | Solana | Blockchain verification of data provenance |
 | MLH | .Tech Domain | Desktop mic + 10yr domain each |
 
-**Constraints:** 1 path + 2 opt-in + 3 sponsor + unlimited MLH
+**Constraints:** 1 path + 2 opt-in + 3 sponsor + unlimited MLH. Solana is stretch goal if time permits.
 
 ---
 
@@ -32,14 +33,15 @@ Build an AI-powered regulatory intelligence platform that aggregates live Chicag
 │  ┌─────────────────── DATA PIPELINES (cron) ──────────────────┐  │
 │  │                                                             │  │
 │  │  ┌──────────────┐  ┌───────────────┐  ┌────────────────┐  │  │
-│  │  │ News Ingester│  │ Politics      │  │ Social/Reviews │  │  │
-│  │  │ (30 min)     │  │ Ingester      │  │ Ingester       │  │  │
-│  │  │              │  │ (daily)       │  │ (1hr / daily)  │  │  │
-│  │  │ - NewsAPI    │  │ - Legistar    │  │ - Reddit API   │  │  │
-│  │  │ - RSS feeds  │  │   API         │  │ - Yelp Fusion  │  │  │
-│  │  │ - Local news │  │ - PDF parse   │  │ - Google Places│  │  │
-│  │  │   sources    │  │   (pymupdf)   │  │                │  │  │
-│  │  │              │  │ - LLM summary │  │                │  │  │
+│  │  │ News Ingester│  │ Politics      │  │ Reddit        ││ Reviews       │  │  │
+│  │  │ (30 min)     │  │ Ingester      │  │ Ingester      ││ Ingester      │  │  │
+│  │  │              │  │ (daily)       │  │ (hourly)      ││ (daily)       │  │  │
+│  │  │ - NewsAPI    │  │ - Legistar    │  │ - asyncpraw   ││ - Yelp Fusion │  │  │
+│  │  │ - RSS feeds  │  │   API         │  │ - r/chicago   ││ - Google      │  │  │
+│  │  │ - Local news │  │ - PDF parse   │  │ - r/chicagofood│  Places     │  │  │
+│  │  │   sources    │  │  (pymupdf/    │  │ - neighborhood││ - Review      │  │  │
+│  │  │              │  │   pdfplumber) │  │   subs        ││   velocity    │  │  │
+│  │  │              │  │ - LLM summary │  │               ││               │  │  │
 │  │  └──────┬───────┘  └──────┬────────┘  └───────┬────────┘  │  │
 │  │         │                 │                    │           │  │
 │  │  ┌──────▼─────────────────▼────────────────────▼────────┐ │  │
@@ -47,7 +49,7 @@ Build an AI-powered regulatory intelligence platform that aggregates live Chicag
 │  │  │  - data.cityofchicago.org (Socrata API)              │ │  │
 │  │  │  - CTA ridership, crime stats, permits, licenses     │ │  │
 │  │  │  - Census/ACS demographics (monthly)                 │ │  │
-│  │  │  - Commercial real estate (LoopNet scrape)            │ │  │
+│  │  │  - Commercial real estate (CoStar API / LoopNet)      │ │  │
 │  │  └──────────────────────┬───────────────────────────────┘ │  │
 │  └─────────────────────────┼─────────────────────────────────┘  │
 │                            │                                     │
@@ -117,13 +119,13 @@ Build an AI-powered regulatory intelligence platform that aggregates live Chicag
 |--------|-----------|---------|---------------|--------|
 | Local News | NewsAPI, RSS feeds (Chicago Tribune, Block Club Chicago) | 30 min | `news_ingester` | Articles + metadata (source, timestamp, geo-tags) |
 | City Council | Chicago Legistar API | Daily | `politics_ingester` | Legislation, agendas, minutes |
-| Meeting Transcripts | Zoning Board, Plan Commission PDFs | Daily | `pdf_processor` (pymupdf/pdfplumber + Llama summarize) | Extracted text, entity summaries |
+| Meeting Transcripts | Zoning Board, Plan Commission PDFs | Daily | `politics_ingester` (pymupdf/pdfplumber + Llama summarize) | Extracted text, entity summaries |
 | Reddit | asyncpraw (r/chicago, r/chicagofood, neighborhood subs) | Hourly | `reddit_ingester` | Posts + sentiment |
 | Yelp | Yelp Fusion API | Daily | `review_ingester` | Business ratings, review velocity |
 | Google Places | Places API | Daily | `review_ingester` | Ratings, review velocity |
 | City Data Portal | Socrata API (data.cityofchicago.org) | Daily | `public_data_ingester` | CTA ridership, crime, permits, licenses |
 | Census/ACS | Census API | Monthly | `demographics_ingester` | Demographics by neighborhood |
-| Real Estate | LoopNet scrape | Weekly | `realestate_ingester` | Commercial listings, pricing |
+| Real Estate | CoStar API / LoopNet scrape | Weekly | `realestate_ingester` | Commercial listings, pricing |
 | TikTok/Instagram | Deferred — no public API | N/A | — | Nice to have, defer |
 
 ## Processing Pipeline

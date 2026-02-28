@@ -17,7 +17,7 @@
 | Frontend (React) | Not started | Chat + Dashboard hybrid layout |
 | Modal: Llama 3.1 8B | Not started | Deploy on A10G GPU via vLLM |
 | Modal: MiniLM Embeddings | Not started | Embedding model for RAG |
-| Modal: Data Pipelines | Not started | 7 cron ingesters (news, politics, social, public data) |
+| Modal: Data Pipelines | Not started | 9 cron ingesters (news, politics, reddit, reviews, public data, demographics, realestate) |
 | Modal: Processing | Not started | Embed, classify, geo-tag, index pipeline |
 | OpenAI Integration | Not started | Chat generation from RAG context |
 | Supermemory | Not started | User Profiles, Memory, Retrieval, Connectors, Multi-modal |
@@ -30,7 +30,7 @@
 - Agent configuration documents in place
 - Problem statement and project vision defined
 - Full architecture designed and documented
-- Prize strategy finalized (Voyager + Social Impact + UI/UX + Supermemory + OpenAI + Cloudflare)
+- Prize strategy finalized (Voyager + Social Impact + UI/UX + Supermemory + OpenAI + Cloudflare + Solana stretch goal)
 
 ## What's Broken
 
@@ -51,6 +51,7 @@
 | Supermemory | Remember, understand, adapt. Use multiple APIs | User Profiles + Memory + Retrieval + Connectors + Multi-modal Extractors |
 | OpenAI | Use OpenAI API | Chat generation from RAG-retrieved context |
 | Cloudflare | Use Cloudflare developer platform | Frontend hosted on Cloudflare Pages |
+| Solana (stretch) | Use Solana blockchain | Regulatory data provenance verification — if time permits |
 
 ## Recent Changes
 

@@ -13,7 +13,7 @@
 | Chicago focus | Local to HackIllinois, tangible demo, rich public APIs (Socrata, Legistar) | 2026-02-28 |
 | Supermemory for context | Sponsor track — all 5 APIs: Profiles, Memory, Retrieval, Connectors, Multi-modal | 2026-02-27 |
 | Cloudflare Pages for frontend | Sponsor track ($5K credits/member) + trivial deploy | 2026-02-28 |
-| Dropped Solana | Forced integration, lower ROI than OpenAI/Cloudflare | 2026-02-28 |
+| Solana deferred as stretch goal | Blockchain verification of data provenance — pursue if time permits | 2026-02-28 |
 | Chat + Dashboard hybrid UX | Best of both worlds for UI/UX judges — interactive + visual | 2026-02-28 |
 | Tailwind CSS | Rapid UI development, consistent design system | 2026-02-27 |
 | Name: Alethia | Greek "unconcealment" — truth revealed, not constructed | 2026-02-27 |
@@ -31,6 +31,7 @@
 | Supermemory (RayBans) | App that remembers, understands, adapts. Use multiple APIs | All 5 APIs: Profiles + Memory + Retrieval + Connectors + Multi-modal |
 | OpenAI ($5K credits) | Use OpenAI API | Chat generation from RAG context |
 | Cloudflare ($5K credits) | Use Cloudflare developer platform | Frontend on Cloudflare Pages |
+| Solana (stretch) | Use Solana blockchain | Verification of regulatory data provenance — stretch goal |
 | .Tech Domain (mic) | Register .tech domain | alethia.tech |
 
 ### Key Insight

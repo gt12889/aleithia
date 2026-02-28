@@ -35,8 +35,8 @@ Use OpenAI API in your project. $5K API credits per member.
 ### Best Use of Cloudflare Developer Platform (Sponsor Track)
 Use Cloudflare's developer platform (Pages, Workers, etc.). $5K credits per member.
 
-### Best Use of Solana (Sponsor Track)
-_Dropped from our strategy — forced integration, lower ROI than OpenAI/Cloudflare._
+### Best Use of Solana (Sponsor Track) — STRETCH GOAL
+Stretch goal — blockchain-based verification of regulatory data provenance. Lower priority than core tracks but worth pursuing if time permits. Transparent, immutable audit trail for compliance recommendations.
 
 ## Problem Statement
 
