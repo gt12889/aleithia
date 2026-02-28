@@ -165,7 +165,7 @@ def _build_geo_metrics(summaries: dict[str, DatasetSummary]) -> dict:
 @app.function(
     image=data_image,
     volumes={"/data": volume},
-    timeout=300,
+    timeout=600,
 )
 def compress_raw_data(days: int = 7):
     """Compress raw data into neighborhood-level summaries.

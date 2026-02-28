@@ -10,11 +10,14 @@ import InspectionTable from './InspectionTable.tsx'
 import PermitTable from './PermitTable.tsx'
 import LicenseTable from './LicenseTable.tsx'
 import NewsFeed from './NewsFeed.tsx'
+import CommunityFeed from './CommunityFeed.tsx'
+import MarketPanel from './MarketPanel.tsx'
+import TrafficCard from './TrafficCard.tsx'
 import DemographicsCard from './DemographicsCard.tsx'
 import PipelineMonitor from './PipelineMonitor.tsx'
 import MLMonitor from './MLMonitor.tsx'
 
-type Tab = 'overview' | 'inspections' | 'permits' | 'licenses' | 'news' | 'models'
+type Tab = 'overview' | 'inspections' | 'permits' | 'licenses' | 'news' | 'community' | 'market' | 'models'
 
 interface AgentInfo {
   agents_deployed: number
@@ -95,6 +98,37 @@ function computeRiskScore(data: NeighborhoodData, profile: UserProfile): RiskSco
     })
   }
 
+  // Review ratings factor
+  const reviews = data.reviews || []
+  const ratings = reviews
+    .map(r => (r.metadata?.rating as number) || 0)
+    .filter(r => r > 0)
+  if (ratings.length > 0) {
+    const avgRating = ratings.reduce((a, b) => a + b, 0) / ratings.length
+    factors.push({
+      label: `Avg ${avgRating.toFixed(1)}/5 across ${ratings.length} businesses`,
+      pct: Math.round((5 - avgRating) * 5),
+      source: 'reviews',
+      severity: avgRating < 3.5 ? 'high' as const : avgRating < 4.0 ? 'medium' as const : 'low' as const,
+      description: 'Average business review rating in the area.',
+    })
+  }
+
+  // Traffic congestion factor
+  const traffic = data.traffic || []
+  const congested = traffic.filter(t =>
+    (t.metadata?.congestion_level as string) === 'heavy' || (t.metadata?.congestion_level as string) === 'blocked'
+  )
+  if (congested.length > 0) {
+    factors.push({
+      label: `${congested.length} congested traffic zones`,
+      pct: congested.length * 10,
+      source: 'traffic',
+      severity: congested.length > 3 ? 'high' as const : 'medium' as const,
+      description: 'Heavy traffic may affect foot traffic and deliveries.',
+    })
+  }
+
   const failRate = stats.total > 0 ? stats.failed / stats.total : 0
   const overallScore = Math.min(10, Math.max(1,
     3 + failRate * 4 + (data.license_count > 10 ? 1 : 0) + (data.politics.length > 3 ? 1 : 0)
@@ -103,13 +137,15 @@ function computeRiskScore(data: NeighborhoodData, profile: UserProfile): RiskSco
   const totalPct = factors.reduce((s, f) => s + f.pct, 0) || 1
   factors.forEach(f => { f.pct = Math.round((f.pct / totalPct) * 100) })
 
+  const totalDataPoints = stats.total + data.permit_count + data.license_count + reviews.length + traffic.length
+
   return {
     neighborhood: profile.neighborhood,
     business_type: profile.business_type,
     overall_score: Math.round(overallScore * 10) / 10,
-    confidence: Math.min(0.95, 0.4 + (stats.total + data.license_count + data.permit_count) * 0.01),
+    confidence: Math.min(0.95, 0.4 + totalDataPoints * 0.008),
     factors,
-    summary: `Analysis of ${profile.neighborhood} for a ${profile.business_type.toLowerCase()} based on ${stats.total + data.permit_count + data.license_count} data points across city permits, inspections, licenses, and legislative activity.`,
+    summary: `Analysis of ${profile.neighborhood} for a ${profile.business_type.toLowerCase()} based on ${totalDataPoints} data points across city permits, inspections, licenses, reviews, traffic, and legislative activity.`,
   }
 }
 
@@ -134,26 +170,25 @@ export default function Dashboard({ profile, onReset }: Props) {
   const [activeTab, setActiveTab] = useState<Tab>('overview')
   const userIdRef = useRef(`user_${Date.now()}`)
 
+  const refreshData = async () => {
+    try {
+      const [nbData, srcData] = await Promise.all([
+        api.neighborhood(profile.neighborhood),
+        api.sources(),
+      ])
+      setNeighborhoodData(nbData)
+      setSources(srcData)
+      setRiskScore(computeRiskScore(nbData, profile))
+      setLoading(false)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to load data')
+      setLoading(false)
+    }
+  }
+
   useEffect(() => {
     let cancelled = false
-    async function load() {
-      try {
-        const [nbData, srcData] = await Promise.all([
-          api.neighborhood(profile.neighborhood),
-          api.sources(),
-        ])
-        if (cancelled) return
-        setNeighborhoodData(nbData)
-        setSources(srcData)
-        setRiskScore(computeRiskScore(nbData, profile))
-        setLoading(false)
-      } catch (err) {
-        if (cancelled) return
-        setError(err instanceof Error ? err.message : 'Failed to load data')
-        setLoading(false)
-      }
-    }
-    load()
+    refreshData().then(() => { if (cancelled) return })
     return () => { cancelled = true }
   }, [profile])
 
@@ -201,6 +236,8 @@ export default function Dashboard({ profile, onReset }: Props) {
         onDone: () => {
           setIsStreaming(false)
           setChatLoading(false)
+          // Auto-refresh data after chat — TikTok scrape may have landed new data on volume
+          setTimeout(() => refreshData(), 30_000)
         },
         onError: (_errorMsg) => {
           // Fallback to local response
@@ -271,6 +308,8 @@ export default function Dashboard({ profile, onReset }: Props) {
     { key: 'permits', label: 'Permits', count: neighborhoodData?.permit_count },
     { key: 'licenses', label: 'Licenses', count: neighborhoodData?.license_count },
     { key: 'news', label: 'Intel', count: (neighborhoodData?.news.length || 0) + (neighborhoodData?.politics.length || 0) },
+    { key: 'community', label: 'Community', count: (neighborhoodData?.reddit?.length || 0) + (neighborhoodData?.tiktok?.length || 0) },
+    { key: 'market', label: 'Market', count: (neighborhoodData?.reviews?.length || 0) + (neighborhoodData?.realestate?.length || 0) },
     { key: 'models', label: 'Models' },
   ]
 
@@ -287,6 +326,9 @@ export default function Dashboard({ profile, onReset }: Props) {
         </div>
         <div className="flex items-center gap-5">
           <Timer running={loading} />
+          <button onClick={refreshData} className="text-[10px] font-mono uppercase tracking-wider text-white/20 hover:text-white/50 transition-colors cursor-pointer">
+            Refresh
+          </button>
           <button onClick={onReset} className="text-[10px] font-mono uppercase tracking-wider text-white/20 hover:text-white/50 transition-colors cursor-pointer">
             New Search
           </button>
@@ -355,8 +397,12 @@ export default function Dashboard({ profile, onReset }: Props) {
                     )}
                   </div>
 
+                  {neighborhoodData?.traffic && neighborhoodData.traffic.length > 0 && (
+                    <TrafficCard data={neighborhoodData.traffic} />
+                  )}
+
                   {neighborhoodData && (
-                    <div className="grid grid-cols-4 gap-3">
+                    <div className="grid grid-cols-3 lg:grid-cols-6 gap-3">
                       <StatCard
                         label="Food Inspections"
                         value={neighborhoodData.inspection_stats.total}
@@ -379,6 +425,18 @@ export default function Dashboard({ profile, onReset }: Props) {
                         label="Intel Items"
                         value={neighborhoodData.news.length + neighborhoodData.politics.length}
                         sub="recent"
+                        severity="nominal"
+                      />
+                      <StatCard
+                        label="Business Reviews"
+                        value={neighborhoodData.reviews?.length || 0}
+                        sub={neighborhoodData.metrics.avg_review_rating > 0 ? `avg ${neighborhoodData.metrics.avg_review_rating}/5` : 'listings'}
+                        severity="nominal"
+                      />
+                      <StatCard
+                        label="Community"
+                        value={(neighborhoodData.reddit?.length || 0) + (neighborhoodData.tiktok?.length || 0)}
+                        sub="posts"
                         severity="nominal"
                       />
                     </div>
@@ -416,6 +474,14 @@ export default function Dashboard({ profile, onReset }: Props) {
 
               {activeTab === 'news' && neighborhoodData && (
                 <NewsFeed news={neighborhoodData.news} politics={neighborhoodData.politics} />
+              )}
+
+              {activeTab === 'community' && neighborhoodData && (
+                <CommunityFeed reddit={neighborhoodData.reddit || []} tiktok={neighborhoodData.tiktok || []} />
+              )}
+
+              {activeTab === 'market' && neighborhoodData && (
+                <MarketPanel reviews={neighborhoodData.reviews || []} realestate={neighborhoodData.realestate || []} />
               )}
 
               {activeTab === 'models' && (

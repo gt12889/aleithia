@@ -133,6 +133,11 @@ export interface NeighborhoodData {
   licenses: LicenseRecord[]
   news: Document[]
   politics: Document[]
+  reddit?: Document[]
+  reviews?: Document[]
+  realestate?: Document[]
+  tiktok?: Document[]
+  traffic?: Document[]
   inspection_stats: {
     total: number
     failed: number

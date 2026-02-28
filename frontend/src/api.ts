@@ -135,4 +135,24 @@ export const api = {
   },
   news: () => fetchJSON<Document[]>('/news'),
   politics: () => fetchJSON<Document[]>('/politics'),
+  reddit: (neighborhood?: string) => {
+    const qs = neighborhood ? `?neighborhood=${encodeURIComponent(neighborhood)}` : ''
+    return fetchJSON<Document[]>(`/reddit${qs}`)
+  },
+  reviews: (neighborhood?: string) => {
+    const qs = neighborhood ? `?neighborhood=${encodeURIComponent(neighborhood)}` : ''
+    return fetchJSON<Document[]>(`/reviews${qs}`)
+  },
+  realestate: (neighborhood?: string) => {
+    const qs = neighborhood ? `?neighborhood=${encodeURIComponent(neighborhood)}` : ''
+    return fetchJSON<Document[]>(`/realestate${qs}`)
+  },
+  tiktok: (neighborhood?: string) => {
+    const qs = neighborhood ? `?neighborhood=${encodeURIComponent(neighborhood)}` : ''
+    return fetchJSON<Document[]>(`/tiktok${qs}`)
+  },
+  traffic: (neighborhood?: string) => {
+    const qs = neighborhood ? `?neighborhood=${encodeURIComponent(neighborhood)}` : ''
+    return fetchJSON<Document[]>(`/traffic${qs}`)
+  },
 }

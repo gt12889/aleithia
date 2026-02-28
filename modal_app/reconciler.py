@@ -31,6 +31,7 @@ FRESHNESS_THRESHOLDS = {
     "demographics": 44640, # Monthly
     "reviews": 1500,    # Daily
     "realestate": 10800, # Weekly
+    "tiktok": 1500,     # Daily, alert after 25 hours
 }
 
 cost_dict = modal.Dict.from_name("alethia-costs", create_if_missing=True)
@@ -149,6 +150,18 @@ async def data_reconciler():
             elif source == "politics":
                 from modal_app.pipelines.politics import politics_ingester
                 await politics_ingester.spawn.aio()
+                restarted.append(source)
+            elif source == "reviews":
+                from modal_app.pipelines.reviews import review_ingester
+                await review_ingester.spawn.aio()
+                restarted.append(source)
+            elif source == "realestate":
+                from modal_app.pipelines.realestate import realestate_ingester
+                await realestate_ingester.spawn.aio()
+                restarted.append(source)
+            elif source == "tiktok":
+                from modal_app.pipelines.tiktok import ingest_tiktok
+                ingest_tiktok.spawn()
                 restarted.append(source)
         except Exception as e:
             print(f"Failed to restart {source}: {e}")

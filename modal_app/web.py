@@ -38,7 +38,9 @@ def _load_docs(source: str, limit: int = 200) -> list[dict]:
         return docs
     for json_file in sorted(source_dir.rglob("*.json"), reverse=True)[:limit]:
         try:
-            docs.append(json.loads(json_file.read_text()))
+            parsed = json.loads(json_file.read_text())
+            if isinstance(parsed, dict):
+                docs.append(parsed)
         except Exception:
             continue
     return docs
@@ -99,7 +101,7 @@ def _aggregate_demographics(neighborhood: str) -> dict:
     return {}
 
 
-def _compute_metrics(name: str, inspections: list, permits: list, licenses: list, news: list, politics: list) -> dict:
+def _compute_metrics(name: str, inspections: list, permits: list, licenses: list, news: list, politics: list, reviews: list | None = None) -> dict:
     """Compute neighborhood metrics from actual data instead of relying on pre-computed geo file."""
     total_inspections = len(inspections)
     failed = sum(1 for i in inspections if i.get("metadata", {}).get("raw_record", {}).get("results") in ("Fail", "Out of Business"))
@@ -117,6 +119,10 @@ def _compute_metrics(name: str, inspections: list, permits: list, licenses: list
     # Sentiment: placeholder based on news volume (more news = more activity = higher)
     sentiment = min(100, len(news) * 10) if news else 0
 
+    # Review rating from actual review docs
+    ratings = [r.get("metadata", {}).get("rating", 0) for r in (reviews or []) if r.get("metadata", {}).get("rating")]
+    avg_review_rating = round(sum(ratings) / len(ratings), 1) if ratings else 0.0
+
     return {
         "neighborhood": name,
         "regulatory_density": round(regulatory_density, 1),
@@ -125,8 +131,8 @@ def _compute_metrics(name: str, inspections: list, permits: list, licenses: list
         "risk_score": risk_score,
         "active_permits": len(permits),
         "crime_incidents_30d": 0,
-        "avg_review_rating": 0.0,
-        "review_count": 0,
+        "avg_review_rating": avg_review_rating,
+        "review_count": len(ratings),
     }
 
 
@@ -254,8 +260,11 @@ async def status():
     """Pipeline monitor — shows function states, doc counts, GPU status."""
     pipeline_status = {}
 
-    for source in ["news", "politics", "public_data", "demographics", "reddit", "reviews", "realestate"]:
+    for source in ["news", "politics", "public_data", "demographics", "reddit", "reviews", "realestate", "tiktok", "traffic"]:
         source_dir = Path(RAW_DATA_PATH) / source
+        if not source_dir.exists() and source == "traffic":
+            # Traffic processed docs live under processed/traffic
+            source_dir = Path(RAW_DATA_PATH) / "processed" / "traffic"
         if source_dir.exists():
             json_files = list(source_dir.rglob("*.json"))
             # Find most recent file
@@ -303,8 +312,10 @@ async def metrics():
     sources_active = 0
     neighborhoods_covered = set()
 
-    for source in ["news", "politics", "public_data", "demographics", "reddit", "reviews", "realestate"]:
+    for source in ["news", "politics", "public_data", "demographics", "reddit", "reviews", "realestate", "tiktok", "traffic"]:
         source_dir = Path(RAW_DATA_PATH) / source
+        if not source_dir.exists() and source == "traffic":
+            source_dir = Path(RAW_DATA_PATH) / "processed" / "traffic"
         if source_dir.exists():
             json_files = list(source_dir.rglob("*.json"))
             total_docs += len(json_files)
@@ -313,6 +324,8 @@ async def metrics():
             for jf in json_files[:100]:
                 try:
                     doc = json.loads(jf.read_text())
+                    if not isinstance(doc, dict):
+                        continue
                     nb = doc.get("geo", {}).get("neighborhood", "")
                     if nb:
                         neighborhoods_covered.add(nb)
@@ -332,8 +345,10 @@ async def metrics():
 async def sources():
     """Available data sources with counts."""
     result = {}
-    for source in ["news", "politics", "public_data", "demographics", "reddit", "reviews", "realestate"]:
+    for source in ["news", "politics", "public_data", "demographics", "reddit", "reviews", "realestate", "tiktok", "traffic"]:
         source_dir = Path(RAW_DATA_PATH) / source
+        if not source_dir.exists() and source == "traffic":
+            source_dir = Path(RAW_DATA_PATH) / "processed" / "traffic"
         if source_dir.exists():
             count = len(list(source_dir.rglob("*.json")))
             result[source] = {"count": count, "active": count > 0}
@@ -377,12 +392,33 @@ async def neighborhood(name: str):
     if not politics_docs and all_politics:
         politics_docs = all_politics[:5]
 
+    # Load additional data sources
+    all_reddit = _load_docs("reddit")
+    all_reviews = _load_docs("reviews")
+    all_realestate = _load_docs("realestate")
+    all_tiktok = _load_docs("tiktok")
+    all_traffic = _load_docs("processed/traffic")
+
+    reddit_docs = _filter_by_neighborhood(all_reddit, name)
+    reviews_docs = _filter_by_neighborhood(all_reviews, name)
+    realestate_docs = _filter_by_neighborhood(all_realestate, name)
+    tiktok_docs = _filter_by_neighborhood(all_tiktok, name)
+    traffic_docs = _filter_by_neighborhood(all_traffic, name)
+
+    # Fallback: show some global data if no neighborhood-specific matches
+    if not reddit_docs and all_reddit:
+        reddit_docs = all_reddit[:5]
+    if not reviews_docs and all_reviews:
+        reviews_docs = all_reviews[:5]
+    if not realestate_docs and all_realestate:
+        realestate_docs = all_realestate[:5]
+
     # Compute inspection stats
     failed = sum(1 for i in inspections if i.get("metadata", {}).get("raw_record", {}).get("results") in ("Fail", "Out of Business"))
     passed = sum(1 for i in inspections if i.get("metadata", {}).get("raw_record", {}).get("results") == "Pass")
 
     # Compute metrics from actual data
-    computed_metrics = _compute_metrics(name, inspections, permits, licenses, news_docs, politics_docs)
+    computed_metrics = _compute_metrics(name, inspections, permits, licenses, news_docs, politics_docs, reviews_docs)
 
     # Load demographics
     demographics = _aggregate_demographics(name)
@@ -396,6 +432,11 @@ async def neighborhood(name: str):
         "licenses": licenses[:50],
         "news": news_docs[:20],
         "politics": politics_docs[:20],
+        "reddit": reddit_docs[:20],
+        "reviews": reviews_docs[:20],
+        "realestate": realestate_docs[:10],
+        "tiktok": tiktok_docs[:10],
+        "traffic": traffic_docs[:10],
         "inspection_stats": {
             "total": len(inspections),
             "failed": failed,
@@ -452,6 +493,51 @@ async def licenses_list(neighborhood: str = ""):
     if neighborhood:
         licenses = _filter_by_neighborhood(licenses, neighborhood)
     return licenses[:100]
+
+
+@web_app.get("/reddit")
+async def reddit_list(neighborhood: str = ""):
+    """Reddit posts, optionally filtered by neighborhood."""
+    docs = _load_docs("reddit", limit=100)
+    if neighborhood:
+        docs = _filter_by_neighborhood(docs, neighborhood)
+    return docs[:100]
+
+
+@web_app.get("/reviews")
+async def reviews_list(neighborhood: str = ""):
+    """Business reviews (Yelp + Google Places), optionally filtered."""
+    docs = _load_docs("reviews", limit=100)
+    if neighborhood:
+        docs = _filter_by_neighborhood(docs, neighborhood)
+    return docs[:100]
+
+
+@web_app.get("/realestate")
+async def realestate_list(neighborhood: str = ""):
+    """Commercial real estate listings, optionally filtered."""
+    docs = _load_docs("realestate", limit=50)
+    if neighborhood:
+        docs = _filter_by_neighborhood(docs, neighborhood)
+    return docs[:50]
+
+
+@web_app.get("/tiktok")
+async def tiktok_list(neighborhood: str = ""):
+    """TikTok videos with transcriptions, optionally filtered."""
+    docs = _load_docs("tiktok", limit=50)
+    if neighborhood:
+        docs = _filter_by_neighborhood(docs, neighborhood)
+    return docs[:50]
+
+
+@web_app.get("/traffic")
+async def traffic_list(neighborhood: str = ""):
+    """Traffic flow data (processed Documents), optionally filtered."""
+    docs = _load_docs("processed/traffic", limit=100)
+    if neighborhood:
+        docs = _filter_by_neighborhood(docs, neighborhood)
+    return docs[:100]
 
 
 def _aggregate_city_demographics() -> dict:

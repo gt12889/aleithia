@@ -95,48 +95,72 @@ async def _fetch_via_asyncpraw(client_id: str, client_secret: str) -> list[dict]
     return all_docs
 
 
-async def _fetch_via_json(sub_name: str) -> list[dict]:
-    """Fetch from reddit.com JSON API (no auth required)."""
+async def _fetch_via_rss(sub_name: str) -> list[dict]:
+    """Fetch from Reddit RSS feed (no auth, no API key needed)."""
+    import feedparser
+
     docs = []
     async with httpx.AsyncClient(timeout=15, follow_redirects=True, headers={
         "User-Agent": "Mozilla/5.0 (compatible; Alethia/0.1; educational project)"
     }) as client:
-        resp = await client.get(f"https://www.reddit.com/r/{sub_name}/hot.json", params={"limit": 50})
+        resp = await client.get(f"https://www.reddit.com/r/{sub_name}/hot.rss")
         if resp.status_code != 200:
-            print(f"Reddit JSON [{sub_name}]: HTTP {resp.status_code}")
+            print(f"Reddit RSS [{sub_name}]: HTTP {resp.status_code}")
             return docs
 
-        for child in resp.json().get("data", {}).get("children", []):
-            post = child.get("data", {})
-            text = f"{post.get('title', '')}\n\n{post.get('selftext', '')}"
-            if not _is_relevant(text):
-                continue
+    feed = feedparser.parse(resp.text)
+    for entry in feed.entries:
+        title = entry.get("title", "")
+        # RSS content is HTML — extract text
+        content_html = entry.get("summary", "") or entry.get("content", [{}])[0].get("value", "") if entry.get("content") else ""
+        # Strip HTML tags for plain text
+        import re
+        content_text = re.sub(r"<[^>]+>", " ", content_html)
+        content_text = re.sub(r"\s+", " ", content_text).strip()
 
-            neighborhood = detect_neighborhood(text)
+        text = f"{title}\n\n{content_text}"
+        if not _is_relevant(text):
+            continue
 
-            docs.append({
-                "id": f"reddit-{post.get('id', '')}",
-                "source": SourceType.REDDIT.value,
-                "title": post.get("title", ""),
-                "content": (post.get("selftext", "") or post.get("title", ""))[:3000],
-                "url": f"https://reddit.com{post.get('permalink', '')}",
-                "timestamp": datetime.fromtimestamp(post.get("created_utc", 0), tz=timezone.utc).isoformat(),
-                "metadata": {
-                    "subreddit": sub_name,
-                    "score": post.get("score", 0),
-                    "num_comments": post.get("num_comments", 0),
-                    "upvote_ratio": post.get("upvote_ratio", 0),
-                    "flair": post.get("link_flair_text", ""),
-                    "author": post.get("author", "[deleted]"),
-                },
-                "geo": {"neighborhood": neighborhood} if neighborhood else {},
-            })
+        # Parse timestamp
+        published = entry.get("published_parsed") or entry.get("updated_parsed")
+        if published:
+            from time import mktime
+            ts = datetime.fromtimestamp(mktime(published), tz=timezone.utc).isoformat()
+        else:
+            ts = datetime.now(timezone.utc).isoformat()
+
+        # Extract reddit post ID from link
+        link = entry.get("link", "")
+        post_id = link.rstrip("/").split("/")[-1] if "/comments/" in link else entry.get("id", "")
+
+        neighborhood = detect_neighborhood(text)
+
+        docs.append({
+            "id": f"reddit-{post_id}",
+            "source": SourceType.REDDIT.value,
+            "title": title,
+            "content": content_text[:3000] or title,
+            "url": link,
+            "timestamp": ts,
+            "metadata": {
+                "subreddit": sub_name,
+                "score": 0,
+                "num_comments": 0,
+                "upvote_ratio": 0,
+                "flair": entry.get("category", ""),
+                "author": entry.get("author", entry.get("author_detail", {}).get("name", "[unknown]")),
+            },
+            "geo": {"neighborhood": neighborhood} if neighborhood else {},
+        })
+
+    print(f"Reddit RSS [{sub_name}]: {len(docs)} relevant posts")
     return docs
 
 
-async def _fetch_all_json() -> list[dict]:
-    """Fallback: fetch all subreddits via JSON API in parallel."""
-    coros = [_fetch_via_json(sub) for sub in REDDIT_SUBREDDITS]
+async def _fetch_all_rss() -> list[dict]:
+    """Fallback: fetch all subreddits via RSS feeds in parallel."""
+    coros = [_fetch_via_rss(sub) for sub in REDDIT_SUBREDDITS]
     results = await gather_with_limit(coros, max_concurrent=4)
     docs = []
     for result in results:
@@ -158,11 +182,11 @@ async def reddit_ingester():
     client_id = os.environ.get("REDDIT_CLIENT_ID", "")
     client_secret = os.environ.get("REDDIT_CLIENT_SECRET", "")
 
-    # FallbackChain: asyncpraw OAuth → reddit.com JSON → cache
+    # FallbackChain: asyncpraw OAuth → RSS feeds → cache
     chain = FallbackChain("reddit", "all_subs")
     all_docs = await chain.execute([
         lambda: _fetch_via_asyncpraw(client_id, client_secret),
-        _fetch_all_json,
+        _fetch_all_rss,
     ])
 
     if not all_docs:

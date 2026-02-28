@@ -474,3 +474,49 @@ async def gather_with_limit(
                 return None
 
     return await asyncio.gather(*[_limited(c) for c in coros])
+
+
+def compute_freshness(timestamp_str: str | None = None, file_mtime: float | None = None) -> dict:
+    """Compute data freshness from a timestamp string or file mtime.
+
+    Returns {"age_seconds": int, "age_human": "20m ago", "freshness_label": "fresh|recent|aging|stale"}.
+    """
+    now = datetime.now(timezone.utc)
+
+    if timestamp_str:
+        try:
+            ts = datetime.fromisoformat(timestamp_str.replace("Z", "+00:00"))
+            if ts.tzinfo is None:
+                ts = ts.replace(tzinfo=timezone.utc)
+        except (ValueError, AttributeError):
+            return {"age_seconds": -1, "age_human": "unknown", "freshness_label": "stale"}
+    elif file_mtime is not None:
+        ts = datetime.fromtimestamp(file_mtime, tz=timezone.utc)
+    else:
+        return {"age_seconds": -1, "age_human": "unknown", "freshness_label": "stale"}
+
+    age_seconds = int((now - ts).total_seconds())
+    if age_seconds < 0:
+        age_seconds = 0
+
+    # Human-readable age
+    if age_seconds < 60:
+        age_human = f"{age_seconds}s ago"
+    elif age_seconds < 3600:
+        age_human = f"{age_seconds // 60}m ago"
+    elif age_seconds < 86400:
+        age_human = f"{age_seconds // 3600}h ago"
+    else:
+        age_human = f"{age_seconds // 86400}d ago"
+
+    # Freshness label
+    if age_seconds < 3600:
+        label = "fresh"
+    elif age_seconds < 86400:
+        label = "recent"
+    elif age_seconds < 604800:
+        label = "aging"
+    else:
+        label = "stale"
+
+    return {"age_seconds": age_seconds, "age_human": age_human, "freshness_label": label}

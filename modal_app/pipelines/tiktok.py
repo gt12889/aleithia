@@ -408,11 +408,27 @@ def ingest_tiktok(
     volume.commit()
     logger.info("Saved %d TikTok documents to volume", len(new_docs))
 
+    # Build content summaries for downstream consumers (agents, LLM synthesis)
+    video_summaries = []
+    for doc_data in new_docs[:10]:
+        summary = {
+            "title": doc_data.get("title", "")[:150],
+            "creator": doc_data.get("metadata", {}).get("creator", ""),
+            "hashtags": doc_data.get("metadata", {}).get("hashtags", []),
+            "views": doc_data.get("metadata", {}).get("views", ""),
+            "neighborhood": doc_data.get("geo", {}).get("neighborhood", ""),
+        }
+        content = doc_data.get("content", "")
+        if content:
+            summary["content_preview"] = content[:200]
+        video_summaries.append(summary)
+
     return {
         "scraped": len(all_videos),
         "transcribed": transcribed_count,
         "saved": len(new_docs),
         "deduped": skipped,
+        "videos": video_summaries,
     }
 
 
@@ -438,10 +454,18 @@ def tiktok_on_demand(queries: list[str] | None = None):
 # ---------------------------------------------------------------------------
 
 @app.local_entrypoint()
-def main():
+def main(query: str = "", max_videos: int = 5, no_transcribe: bool = False):
+    """Run TikTok ingestion. Pass --query to search a specific term, or omit for defaults.
+
+    Examples:
+        modal run -m modal_app -- --query "chicago small business"
+        modal run -m modal_app -- --query "wicker park restaurants" --max-videos 3
+        modal run -m modal_app                # uses all default Chicago queries
+    """
+    queries = [query] if query else None
     result = ingest_tiktok.remote(
-        queries=["chicago small business", "chicago restaurant opening"],
-        max_videos=3,
-        transcribe=True,
+        queries=queries,
+        max_videos=max_videos,
+        transcribe=not no_transcribe,
     )
     print(json.dumps(result, indent=2))
