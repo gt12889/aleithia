@@ -305,7 +305,13 @@ export default function Dashboard({ profile, onReset }: Props) {
       {/* Top bar */}
       <header className="flex items-center justify-between px-6 py-3 bg-white/[0.02] backdrop-blur-md border-b border-white/[0.06]">
         <div className="flex items-center gap-5">
-          <h1 className="text-sm font-semibold text-white uppercase tracking-wide">Alethia</h1>
+          <button
+            type="button"
+            onClick={onReset}
+            className="text-sm font-semibold text-white uppercase tracking-wide hover:text-white/80 transition-colors cursor-pointer"
+          >
+            Alethia
+          </button>
           <div className="h-3.5 w-px bg-white/10" />
           <span className="text-xs font-mono text-white/30">
             {profile.business_type} <span className="text-white/10 mx-1">/</span> <span className="text-white/50">{profile.neighborhood}</span>

@@ -16,6 +16,7 @@ const SPONSOR_LOGO_SVGS = {
 
 interface Props {
   onGetStarted: () => void
+  onViewSource?: () => void
 }
 
 function makeStatic(app: Application) {
@@ -97,7 +98,7 @@ const DATA_PILLARS = [
   },
 ]
 
-export default function LandingPage({ onGetStarted }: Props) {
+export default function LandingPage({ onGetStarted, onViewSource }: Props) {
   const { signOut } = useClerk()
 
   return (
@@ -116,9 +117,13 @@ export default function LandingPage({ onGetStarted }: Props) {
         <div className="relative z-20 min-h-screen flex flex-col pointer-events-none">
           {/* Translucent nav */}
           <nav className="flex items-center justify-between px-10 py-5 bg-white/[0.03] backdrop-blur-md border-b border-white/[0.06]">
-            <span className="text-lg font-semibold tracking-tight text-white uppercase">
+            <button
+              type="button"
+              onClick={() => window.scrollTo({ top: 0, behavior: 'smooth' })}
+              className="pointer-events-auto text-lg font-semibold tracking-tight text-white uppercase hover:text-white/80 transition-colors cursor-pointer"
+            >
               Alethia
-            </span>
+            </button>
             <div className="pointer-events-auto flex items-center gap-2">
               <SignedOut>
                 <SignInButton mode="modal">
@@ -173,14 +178,13 @@ export default function LandingPage({ onGetStarted }: Props) {
                 >
                   Analyze a Neighborhood
                 </button>
-                <a
-                  href="https://github.com"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="pointer-events-auto px-8 py-3.5 text-sm font-semibold border border-white/20 text-white/70 hover:text-white hover:border-white/40 transition-colors"
+                <button
+                  type="button"
+                  onClick={() => onViewSource?.()}
+                  className="pointer-events-auto px-8 py-3.5 text-sm font-semibold border border-white/20 text-white/70 hover:text-white hover:border-white/40 transition-colors cursor-pointer"
                 >
                   View Source
-                </a>
+                </button>
               </div>
             </div>
           </div>
