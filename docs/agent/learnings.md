@@ -5,13 +5,18 @@
 | Decision | Rationale | Date |
 |----------|-----------|------|
 | FastAPI + React | Fast to build, good DX, strong ecosystem | 2026-02-27 |
-| Modal for AI inference | Sponsor track — serverless GPU, no infra management, pay-per-use | 2026-02-27 |
-| Supermemory for context | Sponsor track — persistent business-specific regulatory knowledge | 2026-02-27 |
-| Solana for provenance | Sponsor track — verify regulatory data sources and timestamps | 2026-02-27 |
-| pandas + polars | pandas for compatibility, polars for performance on large datasets | 2026-02-27 |
-| Tailwind CSS | Rapid UI development, consistent design system for UI/UX track | 2026-02-27 |
-| Flat agent docs | Simplicity over hierarchy for hackathon pace | 2026-02-27 |
-| Name: Alethia | Greek "unconcealment" — truth revealed, not constructed. Fits regulatory transparency mission | 2026-02-27 |
+| Monolith over microservices | 36-hour hackathon — simplicity wins | 2026-02-28 |
+| Modal as ENTIRE compute backbone | Pipelines + inference on one platform = genuinely ambitious for judges | 2026-02-28 |
+| Llama 3.1 8B over 70B | Fits A10G, fast inference, $250 credits last longer | 2026-02-28 |
+| OpenAI for chat generation | Best quality, separates concerns from Modal inference. $5K credits/member | 2026-02-28 |
+| Live data over pre-curated | More ambitious demo, real-time relevance, stronger Modal submission | 2026-02-28 |
+| Chicago focus | Local to HackIllinois, tangible demo, rich public APIs (Socrata, Legistar) | 2026-02-28 |
+| Supermemory for context | Sponsor track — all 5 APIs: Profiles, Memory, Retrieval, Connectors, Multi-modal | 2026-02-27 |
+| Cloudflare Pages for frontend | Sponsor track ($5K credits/member) + trivial deploy | 2026-02-28 |
+| Dropped Solana | Forced integration, lower ROI than OpenAI/Cloudflare | 2026-02-28 |
+| Chat + Dashboard hybrid UX | Best of both worlds for UI/UX judges — interactive + visual | 2026-02-28 |
+| Tailwind CSS | Rapid UI development, consistent design system | 2026-02-27 |
+| Name: Alethia | Greek "unconcealment" — truth revealed, not constructed | 2026-02-27 |
 
 ## Judging Strategy
 
@@ -19,22 +24,28 @@
 
 | Track | What Judges Want | How Alethia Delivers |
 |-------|-----------------|---------------------|
-| Best Voyager Hack | Creativity, technical complexity, impact, execution | Novel regulatory AI + multi-track integration + social mission |
-| Modal AI Inference | Ambitious inference on Modal solving real-world problem | Run regulatory analysis models on Modal GPUs — not just API wrapping |
-| Best UI/UX | Intuitive, polished, delightful. Visual hierarchy, accessibility, seamless interaction | Premium dashboard that makes complex data feel effortless |
-| Best Social Impact | Tangible positive change addressing pressing societal issue | Directly addresses regulatory inequity for small businesses |
-| Supermemory | App that remembers, understands, adapts. Use multiple APIs | Store business profiles, regulatory context, past queries — app gets smarter per user |
+| Best Voyager Hack ($5K) | Creativity, technical complexity, impact, execution | Live data pipelines + dual-model inference + social mission |
+| Modal AI Inference | Ambitious inference on Modal solving real-world problem | ENTIRE compute backbone: 7 cron pipelines + Llama 3.1 8B + embeddings — not just API wrapping |
+| Best UI/UX (Camera) | Intuitive, polished, delightful. Visual hierarchy, accessibility, seamless interaction | Chat + Dashboard hybrid with Chicago map, risk cards, streaming |
+| Best Social Impact (Speakers) | Tangible positive change addressing pressing societal issue | Directly addresses regulatory inequity for small businesses |
+| Supermemory (RayBans) | App that remembers, understands, adapts. Use multiple APIs | All 5 APIs: Profiles + Memory + Retrieval + Connectors + Multi-modal |
+| OpenAI ($5K credits) | Use OpenAI API | Chat generation from RAG context |
+| Cloudflare ($5K credits) | Use Cloudflare developer platform | Frontend on Cloudflare Pages |
+| .Tech Domain (mic) | Register .tech domain | alethia.tech |
 
 ### Key Insight
 The social impact narrative is our strongest differentiator. Every demo moment should reinforce: "Big companies have teams of lawyers and analysts. We give that same power to a coffee shop owner." The technical sophistication (Modal, Supermemory) serves this story.
 
 ### Demo Script Framework
-1. Meet our user: small business owner opening a restaurant in Illinois
-2. Show the regulatory complexity they face (the problem)
-3. Alethia aggregates and analyzes (Modal AI inference — show it working)
-4. Actionable recommendations appear (the solution)
-5. Come back later — Supermemory remembers their context (it adapts)
-6. Contrast: "A large firm has a team for this. Now you have Alethia."
+1. Meet our user: small business owner opening a restaurant in **Lincoln Park, Chicago**
+2. Onboard: enter business type + neighborhood → Supermemory stores profile
+3. Show the regulatory complexity: permits, zoning, health dept, employment law
+4. Live data: "Today's City Council discussed new restaurant zoning in your ward" (from Legistar pipeline)
+5. Local Pulse: Reddit sentiment about the neighborhood, Yelp review trends, CTA foot traffic data
+6. AI Analysis: Modal runs Llama 3.1 → risk score, action items, personalized recommendations
+7. Chat: "What permits do I need?" → OpenAI generates response from RAG context → streams to chat
+8. Come back later → Supermemory remembers everything → new recommendations based on latest data
+9. Contrast: "A large firm has a team of lawyers and analysts for this. Now you have Alethia."
 
 ## Domain Knowledge
 

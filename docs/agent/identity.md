@@ -29,8 +29,14 @@ Recognizes the project with the most significant potential for **positive change
 Use Supermemory's Context Engineering APIs to build an app that **remembers, understands, and adapts** to its users. Leverage: Retrieval, Memory, User Profiles, Connectors, or Multi-modal Extractors — or combine them all.
 - Free tier available; top up at Supermemory booth if credits run out
 
+### Best Use of OpenAI API (Sponsor Track)
+Use OpenAI API in your project. $5K API credits per member.
+
+### Best Use of Cloudflare Developer Platform (Sponsor Track)
+Use Cloudflare's developer platform (Pages, Workers, etc.). $5K credits per member.
+
 ### Best Use of Solana (Sponsor Track)
-_Criteria TBD — check prize page for details._
+_Dropped from our strategy — forced integration, lower ROI than OpenAI/Cloudflare._
 
 ## Problem Statement
 
@@ -44,10 +50,11 @@ Democratize high-level, data-driven regulatory and business intelligence. Give s
 
 ## What Alethia Does
 
-1. **Aggregates** disparate regulatory, political, and consumer sentiment data across jurisdictions
-2. **Analyzes** this data using AI/ML (via Modal) to identify critical risks and opportunities
-3. **Translates** complex findings into actionable, context-specific recommendations
-4. **Reveals** hidden risks and opportunities that small business owners would otherwise miss
+1. **Aggregates** live Chicago-area data — local news, city council activity, Reddit/Yelp sentiment, public records (CTA, crime, permits) — via Modal cron pipelines
+2. **Analyzes** this data using Llama 3.1 8B + embeddings on Modal GPUs to identify critical risks and opportunities
+3. **Translates** complex findings into actionable, context-specific recommendations via OpenAI chat generation
+4. **Remembers** each user's business context via Supermemory — the app gets smarter over time
+5. **Reveals** hidden risks and opportunities that small business owners would otherwise miss
 
 ## Constraints
 
