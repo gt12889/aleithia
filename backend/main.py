@@ -2,8 +2,12 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from routes import modal_router, data_router
+from database import init_db
 
 app = FastAPI(title="HackIllinois 2026 API")
+
+# Initialize database tables
+init_db()
 
 app.add_middleware(
     CORSMiddleware,

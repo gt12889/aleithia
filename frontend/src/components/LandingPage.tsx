@@ -6,6 +6,7 @@ import CityGlobe from './CityGlobe'
 
 interface Props {
   onGetStarted: () => void
+  onOpenProfile?: () => void
 }
 
 function makeStatic(app: Application) {
@@ -50,7 +51,7 @@ const DATA_PILLARS = [
   },
 ]
 
-export default function LandingPage({ onGetStarted }: Props) {
+export default function LandingPage({ onGetStarted, onOpenProfile }: Props) {
   const { signOut } = useClerk()
 
   return (
@@ -87,6 +88,14 @@ export default function LandingPage({ onGetStarted }: Props) {
               </SignedOut>
 
               <SignedIn>
+                {onOpenProfile && (
+                  <button
+                    onClick={onOpenProfile}
+                    className="px-4 py-2 text-sm font-medium border border-white/20 text-white/80 hover:text-white hover:border-white/40 transition-colors cursor-pointer"
+                  >
+                    Profile
+                  </button>
+                )}
                 <button
                   onClick={() => signOut()}
                   className="px-4 py-2 text-sm font-medium border border-white/20 text-white/80 hover:text-white hover:border-white/40 transition-colors cursor-pointer"

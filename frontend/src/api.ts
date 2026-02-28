@@ -5,14 +5,28 @@ const API_BASE = import.meta.env.VITE_MODAL_URL || '/api/data'
 
 async function fetchJSON<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${API_BASE}${path}`, init)
-  if (!res.ok) throw new Error(`API error: ${res.status}`)
+  if (!res.ok) {
+    const error = await res.text()
+    throw new Error(`API error ${res.status}: ${error}`)
+  }
   return res.json()
 }
 
 export interface SavedSettings {
-  user_id: string
-  location_type: string
+  clerk_user_id: string
+  business_type: string | null
+  neighborhood: string | null
+  created_at: string
+  updated_at: string
+}
+
+export interface UserQuery {
+  id: number
+  clerk_user_id: string
+  query_text: string
+  business_type: string
   neighborhood: string
+  created_at: string
 }
 
 export interface StreamChatCallbacks {
@@ -38,16 +52,23 @@ export async function streamChat(
   message: string,
   profile: { business_type: string; neighborhood: string },
   callbacks: StreamChatCallbacks,
-  userId?: string,
+  token?: string,
 ): Promise<void> {
   const chatUrl = `${API_BASE}/chat`
 
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+  }
+  
+  if (token) {
+    headers['Authorization'] = `Bearer ${token}`
+  }
+
   const res = await fetch(chatUrl, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers,
     body: JSON.stringify({
       message,
-      user_id: userId || `user_${Date.now()}`,
       business_type: profile.business_type,
       neighborhood: profile.neighborhood,
     }),
@@ -141,20 +162,41 @@ export const api = {
   },
   news: () => fetchJSON<Document[]>('/news'),
   politics: () => fetchJSON<Document[]>('/politics'),
-  getUserSettings: (userId: string) => fetchJSON<SavedSettings>('/user/settings', {
+  
+  // User profile endpoints (require Clerk token)
+  getUserProfile: (token: string) => fetchJSON<SavedSettings>('/user/profile', {
     headers: {
-      'x-user-id': userId,
+      'Authorization': `Bearer ${token}`,
     },
   }),
-  saveUserSettings: (userId: string, locationType: string, neighborhood: string) => fetchJSON<SavedSettings>('/user/settings', {
-    method: 'PUT',
-    headers: {
-      'Content-Type': 'application/json',
-      'x-user-id': userId,
-    },
-    body: JSON.stringify({
-      location_type: locationType,
-      neighborhood,
+  
+  updateUserProfile: (token: string, businessType: string, neighborhood: string) => 
+    fetchJSON<SavedSettings>('/user/profile', {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${token}`,
+      },
+      body: JSON.stringify({
+        business_type: businessType,
+        neighborhood,
+      }),
     }),
-  }),
+
+  getUserQueries: (token: string, limit = 10) =>
+    fetchJSON<UserQuery[]>(`/user/queries?limit=${limit}`, {
+      headers: {
+        'Authorization': `Bearer ${token}`,
+      },
+    }),
+
+  createUserQuery: (token: string, payload: { query_text: string; business_type: string; neighborhood: string }) =>
+    fetchJSON<UserQuery>('/user/queries', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${token}`,
+      },
+      body: JSON.stringify(payload),
+    }),
 }

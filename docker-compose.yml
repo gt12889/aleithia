@@ -1,4 +1,20 @@
 services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: hackil26
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-hackil26_dev}
+      POSTGRES_DB: hackil26
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U hackil26"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
   backend:
     build: ./backend
     ports:
@@ -8,6 +24,10 @@ services:
     environment:
       - MODAL_TOKEN_ID=${MODAL_TOKEN_ID:-}
       - MODAL_TOKEN_SECRET=${MODAL_TOKEN_SECRET:-}
+      - DATABASE_URL=postgresql://hackil26:${POSTGRES_PASSWORD:-hackil26_dev}@postgres:5432/hackil26
+    depends_on:
+      postgres:
+        condition: service_healthy
 
   frontend:
     build: ./frontend
@@ -17,9 +37,10 @@ services:
       - ./frontend/src:/app/src
       - ./frontend/public:/app/public
       - ./frontend/index.html:/app/index.html
-      - ./frontend/.env:/app/.env
       - ./frontend/vite.config.ts:/app/vite.config.ts
-      - ./frontend/tsconfig.json:/app/tsconfig.json
-      - ./frontend/tsconfig.app.json:/app/tsconfig.app.json
+      - ./frontend/.env:/app/.env
     depends_on:
       - backend
+
+volumes:
+  postgres_data:

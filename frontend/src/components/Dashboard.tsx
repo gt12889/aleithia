@@ -117,9 +117,11 @@ function computeRiskScore(data: NeighborhoodData, profile: UserProfile): RiskSco
 interface Props {
   profile: UserProfile
   onReset: () => void
+  token?: string | null
+  onProfileClick?: () => void
 }
 
-export default function Dashboard({ profile, onReset }: Props) {
+export default function Dashboard({ profile, onReset, token, onProfileClick }: Props) {
   const { signOut } = useClerk()
   const { user } = useUser()
   const [neighborhoodData, setNeighborhoodData] = useState<NeighborhoodData | null>(null)
@@ -205,8 +207,8 @@ export default function Dashboard({ profile, onReset }: Props) {
           setIsStreaming(false)
           setChatLoading(false)
 
-          if (user) {
-            api.saveUserSettings(user.id, profile.business_type, profile.neighborhood).catch(() => {})
+          if (token) {
+            api.updateUserProfile(token, profile.business_type, profile.neighborhood).catch(() => {})
           }
 
           setMessages(prev => {
@@ -270,7 +272,7 @@ export default function Dashboard({ profile, onReset }: Props) {
           })
           setChatLoading(false)
         },
-      }, userId)
+      }, token)
     } catch {
       setIsStreaming(false)
       setChatLoading(false)
@@ -316,6 +318,11 @@ export default function Dashboard({ profile, onReset }: Props) {
 
           <SignedIn>
             {user && <span className="text-[10px] font-mono text-white/25">{user.primaryEmailAddress?.emailAddress}</span>}
+            {onProfileClick && (
+              <button onClick={onProfileClick} className="text-[10px] font-mono uppercase tracking-wider text-white/20 hover:text-white/50 transition-colors cursor-pointer">
+                Profile
+              </button>
+            )}
             <button onClick={() => signOut()} className="text-[10px] font-mono uppercase tracking-wider text-white/20 hover:text-white/50 transition-colors cursor-pointer">
               Sign out
             </button>
