@@ -3,7 +3,15 @@ import Spline from '@splinetool/react-spline'
 import type { Application } from '@splinetool/runtime'
 import CityGlobe from './CityGlobe'
 import LogoLoop from './LogoLoop'
-import { ModalLogo, SuperMemoryLogo, ArizeAILogo, OpenAILogo, ModelLogo } from './SponsorLogos'
+import { ArizeAILogo, ModelLogo } from './SponsorLogos'
+import hfLogo from '../assets/logos/hf-logo.svg?url'
+
+const SPONSOR_LOGO_SVGS = {
+  modal: '/logo/modal-wordmark.svg',
+  supermemory: '/logo/logo-fullmark.svg',
+  chatgpt: '/logo/chatgpt.jpg',
+  huggingface: hfLogo,
+}
 
 interface Props {
   onGetStarted: () => void
@@ -28,14 +36,34 @@ function tuneScene(app: Application) {
   })
 }
 
+const logoImg = (src: string, alt: string, invert?: boolean) => (
+  <img
+    src={src}
+    alt={alt}
+    className={`w-auto object-contain ${invert ? 'invert' : ''}`}
+  />
+)
+
+const HfLogoWithName = ({ name }: { name: string }) => (
+  <span className="flex items-center gap-4 h-14">
+    <img
+      src={SPONSOR_LOGO_SVGS.huggingface}
+      alt="Hugging Face"
+      className="h-14 w-auto object-contain shrink-0"
+      style={{ filter: 'grayscale(1) brightness(0) invert(1)' }}
+    />
+    <span className="font-semibold text-[1.25rem] whitespace-nowrap leading-none">{name}</span>
+  </span>
+)
+
 const SPONSOR_LOGOS = [
-  { node: <ModalLogo /> },
-  { node: <SuperMemoryLogo /> },
-  { node: <ArizeAILogo /> },
-  { node: <OpenAILogo /> },
-  { node: <ModelLogo name="Qwen3-8B" /> },
-  { node: <ModelLogo name="BART-large-MNLI" /> },
-  { node: <ModelLogo name="RoBERTa-Sentiment" /> },
+  { node: logoImg(SPONSOR_LOGO_SVGS.modal, 'Modal'), large: false },
+  { node: logoImg(SPONSOR_LOGO_SVGS.supermemory, 'SuperMemory'), large: false },
+  { node: <ArizeAILogo />, large: true },
+  { node: logoImg(SPONSOR_LOGO_SVGS.chatgpt, 'ChatGPT', true), large: true, extraLarge: true },
+  { node: <ModelLogo name="Qwen3-8B" />, large: true },
+  { node: <HfLogoWithName name="BART-large-MNLI" />, large: true },
+  { node: <ModelLogo name="RoBERTa-Sentiment" />, large: true },
 ]
 
 const STATS = [
@@ -129,33 +157,27 @@ export default function LandingPage({ onGetStarted }: Props) {
               </div>
             </div>
           </div>
+
+          {/* Floating scroll arrow */}
+          <button
+            type="button"
+            onClick={() => document.getElementById('next')?.scrollIntoView({ behavior: 'smooth' })}
+            className="pointer-events-auto absolute bottom-8 left-1/2 -translate-x-1/2 text-white/40 hover:text-white/70 transition-colors cursor-pointer"
+            aria-label="Scroll to next section"
+          >
+            <svg
+              className="w-6 h-6 animate-bounce"
+              viewBox="0 0 24 24"
+              fill="currentColor"
+            >
+              <path d="M7 10l5 6 5-6H7z" />
+            </svg>
+          </button>
         </div>
       </section>
 
-      {/* ── Sponsors Ticker ── */}
-      <section className="relative border-t border-white/[0.04] py-10">
-        <p className="text-center text-[10px] font-mono uppercase tracking-[0.3em] text-white/20 mb-6">
-          Sponsored by
-        </p>
-        <LogoLoop
-          logos={SPONSOR_LOGOS.map((s) => ({
-            node: (
-              <span className="text-white/30 hover:text-white/60 transition-colors">
-                {s.node}
-              </span>
-            ),
-          }))}
-          speed={40}
-          gap={64}
-          logoHeight={28}
-          pauseOnHover
-          fadeOut
-          fadeOutColor="#06080d"
-        />
-      </section>
-
       {/* ── Live Stats ── */}
-      <section className="border-t border-white/[0.04] py-16">
+      <section id="next" className="border-t border-white/[0.04] py-16 scroll-mt-0">
         <div className="max-w-5xl mx-auto px-10 grid grid-cols-2 sm:grid-cols-4 gap-8">
           {STATS.map((s) => (
             <div key={s.label} className="text-center">
@@ -168,6 +190,37 @@ export default function LandingPage({ onGetStarted }: Props) {
             </div>
           ))}
         </div>
+      </section>
+
+      {/* ── Sponsors Ticker ── */}
+      <section className="relative border-t border-white/[0.04] py-10">
+        <p className="text-center text-[10px] font-mono uppercase tracking-[0.3em] text-white/20 mb-6">
+          Made possible by
+        </p>
+        <LogoLoop
+          logos={SPONSOR_LOGOS.map((s) => {
+            const sizeClass = (s as { extraLarge?: boolean }).extraLarge
+              ? '[&_img]:h-20 [&_svg]:h-20'
+              : s.large
+                ? '[&_img]:h-14 [&_svg]:h-14'
+                : '[&_img]:h-7 [&_svg]:h-7'
+            return {
+              node: (
+                <span
+                  className={`flex items-center px-4 py-2 text-white/30 hover:text-white/60 transition-colors [&_img]:opacity-70 [&:hover_img]:opacity-100 [&_img]:w-auto [&_img]:object-contain [&_svg]:w-auto [&_svg]:shrink-0 ${sizeClass}`}
+                >
+                  {s.node}
+                </span>
+              ),
+            }
+          })}
+          speed={40}
+          gap={120}
+          logoHeight={80}
+          pauseOnHover
+          fadeOut
+          fadeOutColor="#06080d"
+        />
       </section>
 
       {/* ── City Graph Globe ── */}
