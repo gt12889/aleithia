@@ -254,7 +254,7 @@ async def status():
     """Pipeline monitor — shows function states, doc counts, GPU status."""
     pipeline_status = {}
 
-    for source in ["news", "politics", "public_data", "demographics", "reddit", "reviews", "realestate"]:
+    for source in ["news", "politics", "public_data", "demographics", "reddit", "reviews", "realestate", "traffic"]:
         source_dir = Path(RAW_DATA_PATH) / source
         if source_dir.exists():
             json_files = list(source_dir.rglob("*.json"))
@@ -303,7 +303,7 @@ async def metrics():
     sources_active = 0
     neighborhoods_covered = set()
 
-    for source in ["news", "politics", "public_data", "demographics", "reddit", "reviews", "realestate"]:
+    for source in ["news", "politics", "public_data", "demographics", "reddit", "reviews", "realestate", "traffic"]:
         source_dir = Path(RAW_DATA_PATH) / source
         if source_dir.exists():
             json_files = list(source_dir.rglob("*.json"))
@@ -332,7 +332,7 @@ async def metrics():
 async def sources():
     """Available data sources with counts."""
     result = {}
-    for source in ["news", "politics", "public_data", "demographics", "reddit", "reviews", "realestate"]:
+    for source in ["news", "politics", "public_data", "demographics", "reddit", "reviews", "realestate", "traffic"]:
         source_dir = Path(RAW_DATA_PATH) / source
         if source_dir.exists():
             count = len(list(source_dir.rglob("*.json")))
@@ -465,7 +465,7 @@ async def summary():
     """City-wide summary stats."""
     total_docs = 0
     source_counts = {}
-    for source in ["news", "politics", "public_data", "demographics", "realestate"]:
+    for source in ["news", "politics", "public_data", "demographics", "realestate", "traffic"]:
         source_dir = Path(RAW_DATA_PATH) / source
         if source_dir.exists():
             count = len(list(source_dir.rglob("*.json")))
