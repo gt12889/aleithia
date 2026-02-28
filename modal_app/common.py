@@ -17,6 +17,7 @@ class SourceType(str, Enum):
     DEMOGRAPHICS = "demographics"
     REAL_ESTATE = "real_estate"
     VISION = "vision"
+    TRAFFIC = "traffic"
 
 
 class Document(BaseModel):
