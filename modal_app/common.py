@@ -18,6 +18,7 @@ class SourceType(str, Enum):
     REAL_ESTATE = "real_estate"
     VISION = "vision"
     TRAFFIC = "traffic"
+    TIKTOK = "tiktok"
 
 
 class Document(BaseModel):
@@ -30,6 +31,7 @@ class Document(BaseModel):
     timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     metadata: dict = Field(default_factory=dict)
     geo: dict = Field(default_factory=dict)  # neighborhood, ward, lat/lng
+    status: str = "raw"  # lifecycle: "raw" → "enriched" → "graphed"
 
 
 class RiskFactor(BaseModel):

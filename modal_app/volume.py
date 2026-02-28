@@ -87,3 +87,30 @@ yolo_image = (
     .pip_install("ultralytics==8.2.0", "opencv-python-headless==4.9.0.80")
     .add_local_python_source("modal_app", copy=True)
 )
+
+# TikTok scraper: Playwright + Kernel cloud browser
+tiktok_image = (
+    modal.Image.debian_slim(python_version="3.12")
+    .pip_install(
+        "kernel>=0.1.0",
+        "playwright>=1.40.0",
+        "httpx==0.27.0",
+        "pydantic==2.9.0",
+    )
+    .run_commands("playwright install chromium")
+    .add_local_python_source("modal_app")
+)
+
+# TikTok transcription: yt-dlp + Whisper on GPU
+transcribe_image = (
+    modal.Image.debian_slim(python_version="3.12")
+    .apt_install("ffmpeg")
+    .pip_install(
+        "yt-dlp>=2024.1.0",
+        "openai-whisper>=20231117",
+        "torch>=2.1.0",
+        "httpx==0.27.0",
+        "pydantic==2.9.0",
+    )
+    .add_local_python_source("modal_app")
+)
