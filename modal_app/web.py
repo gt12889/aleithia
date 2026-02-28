@@ -838,6 +838,38 @@ async def geo():
     return {"type": "FeatureCollection", "features": []}
 
 
+@web_app.get("/graph")
+async def graph(page: int = 1, limit: int = 500):
+    """Proxy to Supermemory list documents for Memory Graph visualization."""
+    api_key = os.environ.get("SUPERMEMORY_API_KEY", "")
+    if not api_key:
+        return JSONResponse(
+            {"documents": [], "pagination": {"currentPage": 1, "totalPages": 0}},
+            status_code=200,
+        )
+    import httpx
+    async with httpx.AsyncClient(timeout=30) as client:
+        resp = await client.post(
+            "https://api.supermemory.ai/v3/documents/list",
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {api_key}",
+            },
+            json={
+                "page": page,
+                "limit": limit,
+                "sort": "createdAt",
+                "order": "desc",
+            },
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        # Memory Graph expects 'documents'; Supermemory list returns 'memories'
+        if "memories" in data and "documents" not in data:
+            data["documents"] = data["memories"]
+        return data
+
+
 @web_app.get("/health")
 async def health():
     return {"status": "ok", "timestamp": datetime.now(timezone.utc).isoformat()}

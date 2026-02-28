@@ -100,7 +100,34 @@ export default function ChatPanel({ messages, onSend, loading, isStreaming, agen
           </div>
         ))}
 
-        {/* Process flow trace — inline in chat */}
+        {statusMessage && (
+          <div className="flex justify-start">
+            <div className="bg-white/[0.03] border border-white/[0.06] px-4 py-2.5 text-xs text-white/40">
+              <div className="flex items-center gap-2">
+                <div className="animate-spin w-3 h-3 border border-white/30 border-t-white/60 rounded-full" />
+                <span className="font-mono">{statusMessage}</span>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {agentInfo && (
+          <div className="bg-white/[0.02] border border-white/[0.06] px-4 py-3 text-[10px] font-mono space-y-1">
+            <div className="flex items-center gap-2 text-white/50 font-medium uppercase tracking-wider">
+              <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
+              </svg>
+              {agentInfo.agents_deployed} agents deployed
+            </div>
+            <div className="text-white/30">
+              Analyzed: {agentInfo.neighborhoods.join(', ')}
+            </div>
+            <div className="text-white/20">
+              {agentInfo.data_points} data points processed
+            </div>
+          </div>
+        )}
+
         {processStage && processStage !== 'idle' && (
           <ProcessFlow
             stage={processStage}

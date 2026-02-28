@@ -1,18 +1,19 @@
 import { useEffect, useState } from 'react'
+import { Routes, Route, useNavigate } from 'react-router-dom'
 import { useUser } from '@clerk/clerk-react'
 import type { UserProfile } from './types/index.ts'
 import { api } from './api.ts'
 import LandingPage from './components/LandingPage.tsx'
 import OnboardingForm from './components/OnboardingForm.tsx'
 import Dashboard from './components/Dashboard.tsx'
-
-type View = 'landing' | 'onboarding' | 'dashboard'
+import HowItWorks from './components/HowItWorks.tsx'
+import MemoryGraphPage from './components/MemoryGraphPage.tsx'
 
 function App() {
   const { isLoaded, isSignedIn, user } = useUser()
-  const [view, setView] = useState<View>('landing')
   const [profile, setProfile] = useState<UserProfile | null>(null)
   const [savedProfile, setSavedProfile] = useState<UserProfile | null>(null)
+  const navigate = useNavigate()
 
   useEffect(() => {
     if (!isLoaded || !isSignedIn || !user) return
@@ -39,7 +40,7 @@ function App() {
 
   const handleProfileSubmit = async (p: UserProfile) => {
     setProfile(p)
-    setView('dashboard')
+    navigate('/analysis')
 
     if (isSignedIn && user) {
       try {
@@ -55,15 +56,48 @@ function App() {
     return <div className="min-h-screen bg-[#06080d]" />
   }
 
-  if (!isSignedIn || view === 'landing') {
-    return <LandingPage onGetStarted={() => setView('onboarding')} />
-  }
-
-  if (view === 'onboarding' || !profile) {
-    return <OnboardingForm onSubmit={handleProfileSubmit} onCancel={() => setView('landing')} initialProfile={savedProfile} />
-  }
-
-  return <Dashboard profile={profile} onReset={() => { setProfile(null); setView('landing') }} />
+  return (
+    <Routes>
+      <Route path="/how-it-works" element={<HowItWorks onBack={() => navigate('/')} />} />
+      <Route path="/memory-graph" element={<MemoryGraphPage onBack={() => navigate('/')} />} />
+      <Route
+        path="/"
+        element={
+          <LandingPage
+            onGetStarted={() => navigate('/onboarding')}
+            onViewSource={() => navigate('/how-it-works')}
+          />
+        }
+      />
+      <Route
+        path="/onboarding"
+        element={
+          <OnboardingForm
+            onSubmit={handleProfileSubmit}
+            onCancel={() => navigate('/')}
+            initialProfile={savedProfile}
+          />
+        }
+      />
+      <Route
+        path="/analysis"
+        element={
+          (profile ?? savedProfile) ? (
+            <Dashboard
+              profile={profile ?? savedProfile!}
+              onReset={() => { setProfile(null); navigate('/') }}
+            />
+          ) : (
+            <OnboardingForm
+              onSubmit={handleProfileSubmit}
+              onCancel={() => navigate('/')}
+              initialProfile={savedProfile}
+            />
+          )
+        }
+      />
+    </Routes>
+  )
 }
 
 export default App

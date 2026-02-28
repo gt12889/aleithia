@@ -18,6 +18,7 @@ import TrafficCard from './TrafficCard.tsx'
 import DemographicsCard from './DemographicsCard.tsx'
 import PipelineMonitor from './PipelineMonitor.tsx'
 import MLMonitor from './MLMonitor.tsx'
+import CCTVFeedCard from './CCTVFeedCard.tsx'
 
 type Tab = 'overview' | 'inspections' | 'permits' | 'licenses' | 'news' | 'community' | 'market' | 'models'
 
@@ -226,8 +227,9 @@ export default function Dashboard({ profile, onReset }: Props) {
     setStatusMessage('')
     setProcessStage('deploying')
     setChatQuestion(message)
-    processLogs.current = [`[${new Date().toISOString()}] query: ${message}`]
+    processLogs.current = [`--- query ---\n${message}\n\n--- trace ---`, `[${new Date().toISOString()}] start`]
     const startTime = Date.now()
+    let responseAccum = ''
 
     // Add empty assistant message for streaming
     setMessages(prev => [...prev, { role: 'assistant', content: '', timestamp: new Date() }])
@@ -257,6 +259,7 @@ export default function Dashboard({ profile, onReset }: Props) {
         onToken: (token) => {
           setStatusMessage('')
           setProcessStage('streaming')
+          responseAccum += token
           setMessages(prev => {
             const updated = [...prev]
             const last = updated[updated.length - 1]
@@ -271,6 +274,7 @@ export default function Dashboard({ profile, onReset }: Props) {
           setChatLoading(false)
           setProcessStage('complete')
           processLogs.current.push(`[+${Date.now() - startTime}ms] done, total=${Date.now() - startTime}ms`)
+          processLogs.current.push(`\n--- response ---\n${responseAccum}`)
 
           if (user) {
             api.saveUserSettings(user.id, profile.business_type, profile.neighborhood).catch(() => {})
@@ -335,6 +339,7 @@ export default function Dashboard({ profile, onReset }: Props) {
             response += 'Ask me about specific topics: permits, inspections, competition, or zoning.'
           }
 
+          processLogs.current.push(`\n--- response (local fallback) ---\n${response}`)
           setMessages(prev => {
             const updated = [...prev]
             updated[updated.length - 1] = { role: 'assistant', content: response, timestamp: new Date() }
@@ -367,7 +372,13 @@ export default function Dashboard({ profile, onReset }: Props) {
       {/* Top bar */}
       <header className="flex items-center justify-between px-6 py-3 bg-white/[0.02] backdrop-blur-md border-b border-white/[0.06]">
         <div className="flex items-center gap-5">
-          <h1 className="text-sm font-semibold text-white uppercase tracking-wide">Alethia</h1>
+          <button
+            type="button"
+            onClick={onReset}
+            className="text-sm font-semibold text-white uppercase tracking-wide hover:text-white/80 transition-colors cursor-pointer"
+          >
+            Alethia
+          </button>
           <div className="h-3.5 w-px bg-white/10" />
           <span className="text-xs font-mono text-white/30">
             {profile.business_type} <span className="text-white/10 mx-1">/</span> <span className="text-white/50">{profile.neighborhood}</span>
@@ -469,6 +480,10 @@ export default function Dashboard({ profile, onReset }: Props) {
 
                   {neighborhoodData?.traffic && neighborhoodData.traffic.length > 0 && (
                     <TrafficCard data={neighborhoodData.traffic} />
+                  )}
+
+                  {neighborhoodData?.cctv && neighborhoodData.cctv.cameras.length > 0 && (
+                    <CCTVFeedCard cctv={neighborhoodData.cctv} />
                   )}
 
                   {neighborhoodData && (

@@ -158,6 +158,39 @@ async def get_geo():
     return {"type": "FeatureCollection", "features": []}
 
 
+def _empty_graph_response():
+    return {"documents": [], "pagination": {"currentPage": 1, "totalPages": 0}}
+
+
+@router.get("/graph")
+async def get_graph(page: int = Query(1, ge=1), limit: int = Query(500, ge=1, le=500)):
+    """Proxy to Supermemory list documents for Memory Graph. Requires SUPERMEMORY_API_KEY."""
+    api_key = os.environ.get("SUPERMEMORY_API_KEY", "")
+    if not api_key:
+        return _empty_graph_response()
+
+    try:
+        import httpx
+        async with httpx.AsyncClient(timeout=30) as client:
+            resp = await client.post(
+                "https://api.supermemory.ai/v3/documents/list",
+                headers={
+                    "Content-Type": "application/json",
+                    "Authorization": f"Bearer {api_key}",
+                },
+                json={"page": page, "limit": limit, "sort": "createdAt", "order": "desc"},
+            )
+            if resp.status_code in (401, 403):
+                return _empty_graph_response()
+            resp.raise_for_status()
+            data = resp.json()
+            if "memories" in data and "documents" not in data:
+                data["documents"] = data["memories"]
+            return data
+    except Exception:
+        return _empty_graph_response()
+
+
 @router.get("/summary")
 async def get_summary():
     """Return compressed data summaries."""
