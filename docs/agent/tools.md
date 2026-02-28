@@ -6,10 +6,13 @@
 |-------|-----------|---------|
 | Backend | Python 3.11+ | Server-side logic |
 | API Framework | FastAPI | REST API endpoints |
-| Data Processing | pandas, polars | Dataset manipulation |
+| AI Inference | Modal | Serverless AI/ML model hosting |
+| Data Processing | pandas, polars | Regulatory data manipulation |
+| Memory/Context | Supermemory | Persistent knowledge and context layer |
 | Frontend | React | User interface |
 | Build Tool | Vite | Frontend bundling |
-| Styling | Tailwind CSS | UI styling |
+| Styling | Tailwind CSS | UI styling (Best UI/UX track) |
+| Blockchain | Solana | Data provenance / verification (sponsor track) |
 
 ## Project Structure
 
@@ -19,17 +22,29 @@ hackillinois2026/
 │   ├── main.py              # FastAPI app entry point
 │   ├── requirements.txt     # Python dependencies
 │   ├── routers/             # API route modules
+│   │   ├── regulations.py   # Regulatory data endpoints
+│   │   ├── analysis.py      # AI analysis endpoints
+│   │   └── business.py      # Business profile endpoints
 │   ├── models/              # Pydantic models
 │   ├── services/            # Business logic
+│   │   ├── data_aggregator.py   # Multi-source data ingestion
+│   │   ├── ai_analyzer.py       # Modal AI inference
+│   │   ├── supermemory.py       # Supermemory integration
+│   │   └── recommendation.py   # Actionable recommendations engine
 │   └── tests/               # pytest tests
 ├── frontend/
 │   ├── src/
 │   │   ├── App.jsx          # Root component
 │   │   ├── components/      # Reusable UI components
+│   │   │   ├── Dashboard/   # Main dashboard views
+│   │   │   ├── RiskCard/    # Risk/opportunity display
+│   │   │   └── RegMap/      # Regulatory map visualization
 │   │   ├── pages/           # Page-level components
 │   │   └── api/             # API client functions
 │   ├── package.json
 │   └── vite.config.js
+├── modal/                   # Modal serverless functions
+│   └── inference.py         # AI model inference functions
 ├── docs/
 │   └── agent/               # These config documents
 └── README.md
@@ -69,18 +84,44 @@ npm run build
 npm run lint
 ```
 
+### Modal
+```bash
+# Setup
+pip install modal
+modal token new
+
+# Deploy
+modal deploy modal/inference.py
+
+# Local test
+modal run modal/inference.py
+```
+
 ## Key Libraries
 
 - **FastAPI:** Auto-generates OpenAPI docs at `/docs`
-- **pandas:** Use for CSV/Excel ingestion and transforms
-- **polars:** Use for large dataset performance-critical operations
+- **Modal:** Serverless AI inference — deploy ML models without managing infra
+- **Supermemory:** Persistent memory layer for context-aware AI interactions
+- **pandas:** Regulatory data ingestion and transforms
+- **polars:** Large dataset performance-critical operations
 - **pydantic:** All API models inherit from `BaseModel`
-- **httpx:** Use for async HTTP requests if needed
+- **httpx:** Async HTTP requests for external data sources
+
+## Data Sources
+
+Regulatory and business intelligence data to aggregate:
+- Federal/state/local regulatory databases
+- Political sentiment and legislative tracking
+- Consumer sentiment data
+- Employment law databases
+- Environmental protection regulations
+- Taxation requirements by jurisdiction
+- Regional logistics and supply chain data
 
 ## Database
 
-TBD — Start with file-based storage (CSV/JSON uploads). Add SQLite or PostgreSQL if time permits.
+TBD — Start with file-based storage. Add SQLite or PostgreSQL if time permits. Consider Supermemory for persistent AI context.
 
 ## Deployment
 
-TBD — Likely Vercel (frontend) + Railway/Render (backend) for demo.
+TBD — Likely Vercel (frontend) + Railway/Render (backend) + Modal (AI inference) for demo.
