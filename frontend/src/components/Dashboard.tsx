@@ -15,6 +15,7 @@ import NewsFeed from './NewsFeed.tsx'
 import DemographicsCard from './DemographicsCard.tsx'
 import PipelineMonitor from './PipelineMonitor.tsx'
 import MLMonitor from './MLMonitor.tsx'
+import CCTVFeedCard from './CCTVFeedCard.tsx'
 
 type Tab = 'overview' | 'inspections' | 'permits' | 'licenses' | 'news' | 'models'
 
@@ -191,8 +192,9 @@ export default function Dashboard({ profile, onReset }: Props) {
     setStatusMessage('')
     setProcessStage('deploying')
     setChatQuestion(message)
-    processLogs.current = [`[${new Date().toISOString()}] query: ${message}`]
+    processLogs.current = [`--- query ---\n${message}\n\n--- trace ---`, `[${new Date().toISOString()}] start`]
     const startTime = Date.now()
+    let responseAccum = ''
 
     // Add empty assistant message for streaming
     setMessages(prev => [...prev, { role: 'assistant', content: '', timestamp: new Date() }])
@@ -222,6 +224,7 @@ export default function Dashboard({ profile, onReset }: Props) {
         onToken: (token) => {
           setStatusMessage('')
           setProcessStage('streaming')
+          responseAccum += token
           setMessages(prev => {
             const updated = [...prev]
             const last = updated[updated.length - 1]
@@ -236,6 +239,7 @@ export default function Dashboard({ profile, onReset }: Props) {
           setChatLoading(false)
           setProcessStage('complete')
           processLogs.current.push(`[+${Date.now() - startTime}ms] done, total=${Date.now() - startTime}ms`)
+          processLogs.current.push(`\n--- response ---\n${responseAccum}`)
 
           if (user) {
             api.saveUserSettings(user.id, profile.business_type, profile.neighborhood).catch(() => {})
@@ -297,6 +301,7 @@ export default function Dashboard({ profile, onReset }: Props) {
             response += 'Ask me about specific topics: permits, inspections, competition, or zoning.'
           }
 
+          processLogs.current.push(`\n--- response (local fallback) ---\n${response}`)
           setMessages(prev => {
             const updated = [...prev]
             updated[updated.length - 1] = { role: 'assistant', content: response, timestamp: new Date() }
@@ -429,6 +434,10 @@ export default function Dashboard({ profile, onReset }: Props) {
                       <DemographicsCard metrics={neighborhoodData.metrics} demographics={neighborhoodData.demographics} cctv={neighborhoodData.cctv} />
                     )}
                   </div>
+
+                  {neighborhoodData?.cctv && neighborhoodData.cctv.cameras.length > 0 && (
+                    <CCTVFeedCard cctv={neighborhoodData.cctv} />
+                  )}
 
                   {neighborhoodData && (
                     <div className="grid grid-cols-5 gap-3">
