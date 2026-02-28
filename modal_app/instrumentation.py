@@ -39,6 +39,14 @@ def init_tracing():
             api_key=api_key,
             project_name="alethia",
         )
+
+        # Auto-instrument OpenAI (GPT-4V calls in vision pipeline)
+        try:
+            from openinference.instrumentation.openai import OpenAIInstrumentor
+            OpenAIInstrumentor().instrument(tracer_provider=_tracer_provider)
+        except ImportError:
+            pass  # openinference-instrumentation-openai not installed in this image
+
         logger.info("Arize AX tracing initialized for project 'alethia'")
         return _tracer_provider
     except Exception as e:

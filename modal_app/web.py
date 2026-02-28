@@ -239,15 +239,34 @@ async def chat(request: Request):
 @web_app.get("/brief/{neighborhood}")
 async def brief(neighborhood: str, business_type: str = "Restaurant"):
     """Get intelligence brief for a neighborhood."""
+    from modal_app.instrumentation import get_tracer
+    tracer = get_tracer("alethia.web")
+
+    span_ctx = tracer.start_as_current_span("brief-request") if tracer else None
+    span = span_ctx.__enter__() if span_ctx else None
     try:
+        if span:
+            span.set_attribute("openinference.span.kind", "CHAIN")
+            span.set_attribute("input.value", f"{business_type} in {neighborhood}")
+            span.set_attribute("brief.neighborhood", neighborhood)
+            span.set_attribute("brief.business_type", business_type)
+
         neighborhood_intel_agent = modal.Function.from_name("alethia", "neighborhood_intel_agent")
         result = await neighborhood_intel_agent.remote.aio(
             neighborhood=neighborhood,
             business_type=business_type,
         )
+
+        if span:
+            span.set_attribute("output.value", json.dumps({"data_points": result.get("data_points", 0)}))
         return result
     except Exception as e:
+        if span:
+            span.set_attribute("error", str(e))
         return {"error": str(e), "neighborhood": neighborhood}
+    finally:
+        if span_ctx:
+            span_ctx.__exit__(None, None, None)
 
 
 @web_app.get("/alerts")
@@ -372,70 +391,99 @@ async def sources():
 @web_app.get("/neighborhood/{name}")
 async def neighborhood(name: str):
     """Full neighborhood data profile."""
-    # Also check COMMUNITY_AREA_MAP values for broader coverage
-    valid_names = set(n.lower() for n in CHICAGO_NEIGHBORHOODS) | set(n.lower() for n in COMMUNITY_AREA_MAP.values())
-    if name.lower() not in valid_names:
-        return JSONResponse({"error": f"Unknown neighborhood: {name}"}, status_code=404)
+    from modal_app.instrumentation import get_tracer
+    tracer = get_tracer("alethia.web")
 
-    inspections = []
-    permits = []
-    licenses = []
-    news_docs = []
-    politics_docs = []
+    span_ctx = tracer.start_as_current_span("neighborhood-profile") if tracer else None
+    span = span_ctx.__enter__() if span_ctx else None
+    try:
+        if span:
+            span.set_attribute("openinference.span.kind", "CHAIN")
+            span.set_attribute("input.value", name)
+            span.set_attribute("neighborhood.name", name)
 
-    # Load and filter public data
-    public_docs = _load_docs("public_data", limit=500)
-    nb_docs = _filter_by_neighborhood(public_docs, name)
+        # Also check COMMUNITY_AREA_MAP values for broader coverage
+        valid_names = set(n.lower() for n in CHICAGO_NEIGHBORHOODS) | set(n.lower() for n in COMMUNITY_AREA_MAP.values())
+        if name.lower() not in valid_names:
+            if span:
+                span.set_attribute("error", f"Unknown neighborhood: {name}")
+            return JSONResponse({"error": f"Unknown neighborhood: {name}"}, status_code=404)
 
-    for doc in nb_docs:
-        dataset = doc.get("metadata", {}).get("dataset", "")
-        if dataset == "food_inspections":
-            inspections.append(doc)
-        elif dataset == "building_permits":
-            permits.append(doc)
-        elif dataset == "business_licenses":
-            licenses.append(doc)
+        inspections = []
+        permits = []
+        licenses = []
+        news_docs = []
+        politics_docs = []
 
-    # Load news and politics with improved matching
-    all_news = _load_docs("news")
-    all_politics = _load_docs("politics")
+        # Load and filter public data
+        public_docs = _load_docs("public_data", limit=500)
+        nb_docs = _filter_by_neighborhood(public_docs, name)
 
-    news_docs = _filter_by_neighborhood(all_news, name)
-    politics_docs = _filter_by_neighborhood(all_politics, name)
+        for doc in nb_docs:
+            dataset = doc.get("metadata", {}).get("dataset", "")
+            if dataset == "food_inspections":
+                inspections.append(doc)
+            elif dataset == "building_permits":
+                permits.append(doc)
+            elif dataset == "business_licenses":
+                licenses.append(doc)
 
-    # If no neighborhood-specific news/politics, include recent global items
-    if not news_docs and all_news:
-        news_docs = all_news[:5]
-    if not politics_docs and all_politics:
-        politics_docs = all_politics[:5]
+        # Load news and politics with improved matching
+        all_news = _load_docs("news")
+        all_politics = _load_docs("politics")
 
-    # Compute inspection stats
-    failed = sum(1 for i in inspections if i.get("metadata", {}).get("raw_record", {}).get("results") in ("Fail", "Out of Business"))
-    passed = sum(1 for i in inspections if i.get("metadata", {}).get("raw_record", {}).get("results") == "Pass")
+        news_docs = _filter_by_neighborhood(all_news, name)
+        politics_docs = _filter_by_neighborhood(all_politics, name)
 
-    # Compute metrics from actual data
-    computed_metrics = _compute_metrics(name, inspections, permits, licenses, news_docs, politics_docs)
+        # If no neighborhood-specific news/politics, include recent global items
+        if not news_docs and all_news:
+            news_docs = all_news[:5]
+        if not politics_docs and all_politics:
+            politics_docs = all_politics[:5]
 
-    # Load demographics
-    demographics = _aggregate_demographics(name)
+        # Compute inspection stats
+        failed = sum(1 for i in inspections if i.get("metadata", {}).get("raw_record", {}).get("results") in ("Fail", "Out of Business"))
+        passed = sum(1 for i in inspections if i.get("metadata", {}).get("raw_record", {}).get("results") == "Pass")
 
-    return {
-        "neighborhood": name,
-        "metrics": computed_metrics,
-        "demographics": demographics,
-        "inspections": inspections[:50],
-        "permits": permits[:50],
-        "licenses": licenses[:50],
-        "news": news_docs[:20],
-        "politics": politics_docs[:20],
-        "inspection_stats": {
-            "total": len(inspections),
-            "failed": failed,
-            "passed": passed,
-        },
-        "permit_count": len(permits),
-        "license_count": len(licenses),
-    }
+        # Compute metrics from actual data
+        computed_metrics = _compute_metrics(name, inspections, permits, licenses, news_docs, politics_docs)
+
+        # Load demographics
+        demographics = _aggregate_demographics(name)
+
+        if span:
+            span.set_attribute("output.value", json.dumps({
+                "inspections": len(inspections), "permits": len(permits),
+                "licenses": len(licenses), "news": len(news_docs),
+            }))
+            span.set_attribute("neighborhood.inspections", len(inspections))
+            span.set_attribute("neighborhood.permits", len(permits))
+            span.set_attribute("neighborhood.licenses", len(licenses))
+
+        return {
+            "neighborhood": name,
+            "metrics": computed_metrics,
+            "demographics": demographics,
+            "inspections": inspections[:50],
+            "permits": permits[:50],
+            "licenses": licenses[:50],
+            "news": news_docs[:20],
+            "politics": politics_docs[:20],
+            "inspection_stats": {
+                "total": len(inspections),
+                "failed": failed,
+                "passed": passed,
+            },
+            "permit_count": len(permits),
+            "license_count": len(licenses),
+        }
+    except Exception as e:
+        if span:
+            span.set_attribute("error", str(e))
+        raise
+    finally:
+        if span_ctx:
+            span_ctx.__exit__(None, None, None)
 
 
 # ── Standalone data endpoints (used by api.ts) ──────────────────────────────
