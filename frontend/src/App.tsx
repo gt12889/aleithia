@@ -1,22 +1,16 @@
-import { useEffect, useState } from 'react'
-import './App.css'
+import { useState } from 'react'
+import type { UserProfile } from './types/index.ts'
+import OnboardingForm from './components/OnboardingForm.tsx'
+import Dashboard from './components/Dashboard.tsx'
 
 function App() {
-  const [backendStatus, setBackendStatus] = useState<string>('checking...')
+  const [profile, setProfile] = useState<UserProfile | null>(null)
 
-  useEffect(() => {
-    fetch('/api/health')
-      .then((res) => res.json())
-      .then((data) => setBackendStatus(data.status))
-      .catch(() => setBackendStatus('unreachable'))
-  }, [])
+  if (!profile) {
+    return <OnboardingForm onSubmit={setProfile} />
+  }
 
-  return (
-    <div className="app">
-      <h1>HackIllinois 2026</h1>
-      <p>Backend: <strong>{backendStatus}</strong></p>
-    </div>
-  )
+  return <Dashboard profile={profile} onReset={() => setProfile(null)} />
 }
 
 export default App
