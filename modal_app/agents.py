@@ -12,7 +12,7 @@ from pathlib import Path
 
 import modal
 
-from modal_app.common import COMMUNITY_AREA_MAP
+from modal_app.common import neighborhood_to_ca
 from modal_app.volume import app, volume, base_image, RAW_DATA_PATH, PROCESSED_DATA_PATH
 
 ADJACENT_NEIGHBORHOODS = {
@@ -73,12 +73,8 @@ async def neighborhood_intel_agent(neighborhood: str, business_type: str, focus_
         "data_points": 0,
     }
 
-    # Pre-compute community area for matching
-    nb_community_area = None
-    for ca_num, ca_name in COMMUNITY_AREA_MAP.items():
-        if ca_name.lower() == neighborhood.lower():
-            nb_community_area = str(ca_num)
-            break
+    # Pre-compute community area for matching (handles colloquial names too)
+    nb_community_area = neighborhood_to_ca(neighborhood)
 
     # Read local volume data
     for source in ["public_data", "news", "politics", "demographics"]:
@@ -114,8 +110,12 @@ async def neighborhood_intel_agent(neighborhood: str, business_type: str, focus_
         for json_file in sorted(enriched_dir.rglob("*.json"), reverse=True)[:50]:
             try:
                 doc = json.loads(json_file.read_text())
-                doc_neighborhood = doc.get("geo", {}).get("neighborhood", "")
+                geo = doc.get("geo", {})
+                doc_neighborhood = geo.get("neighborhood", "")
+                doc_ca = geo.get("community_area", "")
                 if doc_neighborhood.lower() == neighborhood.lower():
+                    enriched_docs.append(doc)
+                elif nb_community_area and doc_ca == nb_community_area:
                     enriched_docs.append(doc)
             except Exception:
                 continue

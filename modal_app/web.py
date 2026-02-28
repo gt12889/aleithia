@@ -17,7 +17,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 
 from modal_app.volume import app, volume, web_image, VOLUME_MOUNT, RAW_DATA_PATH, PROCESSED_DATA_PATH
-from modal_app.common import CHICAGO_NEIGHBORHOODS, COMMUNITY_AREA_MAP, detect_neighborhood
+from modal_app.common import CHICAGO_NEIGHBORHOODS, COMMUNITY_AREA_MAP, detect_neighborhood, neighborhood_to_ca
 
 web_app = FastAPI(title="Alethia API", version="2.0")
 
@@ -50,12 +50,7 @@ def _filter_by_neighborhood(docs: list[dict], neighborhood: str) -> list[dict]:
         return docs
     nb_lower = neighborhood.lower()
 
-    # Reverse lookup: find community area number for this neighborhood
-    nb_community_area = None
-    for ca_num, ca_name in COMMUNITY_AREA_MAP.items():
-        if ca_name.lower() == nb_lower:
-            nb_community_area = str(ca_num)
-            break
+    nb_community_area = neighborhood_to_ca(neighborhood)
 
     matched = []
     for d in docs:
@@ -80,55 +75,28 @@ def _filter_by_neighborhood(docs: list[dict], neighborhood: str) -> list[dict]:
     return matched
 
 
+def _load_demographics_summary() -> dict:
+    """Load pre-aggregated demographics summary (one file instead of 1300+ individual reads)."""
+    summary_path = Path(PROCESSED_DATA_PATH) / "demographics_summary.json"
+    if summary_path.exists():
+        try:
+            return json.loads(summary_path.read_text())
+        except Exception as e:
+            print(f"Failed to load demographics summary: {e}")
+    return {}
+
+
 def _aggregate_demographics(neighborhood: str) -> dict:
-    """Aggregate census demographics for a neighborhood from raw demographics docs."""
-    demos = _load_docs("demographics", limit=1500)
-    nb_lower = neighborhood.lower()
-
-    # Try to match demographics by community area or content
-    nb_community_area = None
-    for ca_num, ca_name in COMMUNITY_AREA_MAP.items():
-        if ca_name.lower() == nb_lower:
-            nb_community_area = str(ca_num)
-            break
-
-    # Collect matching tract data
-    tract_data = []
-    for d in demos:
-        meta_demos = d.get("metadata", {}).get("demographics", {})
-        if not meta_demos:
-            continue
-        geo = d.get("geo", {})
-        # Match by community area or content
-        if nb_community_area and geo.get("community_area") == nb_community_area:
-            tract_data.append(meta_demos)
-        elif nb_lower in d.get("content", "").lower()[:200]:
-            tract_data.append(meta_demos)
-
-    if not tract_data:
+    """Look up pre-aggregated census demographics for a neighborhood."""
+    summary = _load_demographics_summary()
+    if not summary:
         return {}
 
-    # Aggregate: weighted average by population for rates, sum for counts
-    total_pop = sum(t.get("total_population", 0) for t in tract_data)
-    if total_pop == 0:
-        return {}
+    nb_community_area = neighborhood_to_ca(neighborhood)
+    if nb_community_area and nb_community_area in summary.get("by_community_area", {}):
+        return summary["by_community_area"][nb_community_area]
 
-    def wavg(field: str) -> float:
-        return sum(t.get(field, 0) * t.get("total_population", 0) for t in tract_data) / total_pop
-
-    return {
-        "total_population": int(total_pop),
-        "median_household_income": round(wavg("median_household_income")),
-        "median_home_value": round(wavg("median_home_value")),
-        "median_gross_rent": round(wavg("median_gross_rent")),
-        "unemployment_rate": round(wavg("unemployment_rate"), 1),
-        "median_age": round(wavg("median_age"), 1),
-        "total_housing_units": int(sum(t.get("total_housing_units", 0) for t in tract_data)),
-        "renter_pct": round(wavg("renter_pct"), 1),
-        "bachelors_degree": int(sum(t.get("bachelors_degree", 0) for t in tract_data)),
-        "masters_degree": int(sum(t.get("masters_degree", 0) for t in tract_data)),
-        "tracts_counted": len(tract_data),
-    }
+    return {}
 
 
 def _compute_metrics(name: str, inspections: list, permits: list, licenses: list, news: list, politics: list) -> dict:
@@ -487,33 +455,9 @@ async def licenses_list(neighborhood: str = ""):
 
 
 def _aggregate_city_demographics() -> dict:
-    """Intentionally aggregate all tracts for city-wide statistics."""
-    demos = _load_docs("demographics", limit=1500)
-    tract_data = [d.get("metadata", {}).get("demographics", {}) for d in demos
-                  if d.get("metadata", {}).get("demographics", {}).get("total_population", 0) > 0]
-    if not tract_data:
-        return {}
-
-    total_pop = sum(t.get("total_population", 0) for t in tract_data)
-    if total_pop == 0:
-        return {}
-
-    def wavg(field: str) -> float:
-        return sum(t.get(field, 0) * t.get("total_population", 0) for t in tract_data) / total_pop
-
-    return {
-        "total_population": int(total_pop),
-        "median_household_income": round(wavg("median_household_income")),
-        "median_home_value": round(wavg("median_home_value")),
-        "median_gross_rent": round(wavg("median_gross_rent")),
-        "unemployment_rate": round(wavg("unemployment_rate"), 1),
-        "median_age": round(wavg("median_age"), 1),
-        "total_housing_units": int(sum(t.get("total_housing_units", 0) for t in tract_data)),
-        "renter_pct": round(wavg("renter_pct"), 1),
-        "bachelors_degree": int(sum(t.get("bachelors_degree", 0) for t in tract_data)),
-        "masters_degree": int(sum(t.get("masters_degree", 0) for t in tract_data)),
-        "tracts_counted": len(tract_data),
-    }
+    """Look up pre-aggregated city-wide demographics."""
+    summary = _load_demographics_summary()
+    return summary.get("city_wide", {})
 
 
 @web_app.get("/summary")

@@ -193,6 +193,42 @@ COMMUNITY_AREA_MAP: dict[int, str] = {
     74: "Mount Greenwood", 75: "Morgan Park", 76: "O'Hare", 77: "Edgewater",
 }
 
+# Colloquial/sub-area names → community area number
+# These are popular neighborhood names that don't match official CA names
+NEIGHBORHOOD_TO_COMMUNITY_AREA: dict[str, int] = {
+    "Wicker Park": 24,       # West Town
+    "Bucktown": 24,          # West Town
+    "Pilsen": 31,            # Lower West Side
+    "River North": 8,        # Near North Side
+    "West Loop": 28,         # Near West Side
+    "Gold Coast": 8,         # Near North Side
+    "Old Town": 7,           # Lincoln Park
+    "Boystown": 6,           # Lakeview
+    "Chinatown": 34,         # Armour Square
+    "South Loop": 33,        # Near South Side
+    "Streeterville": 8,      # Near North Side
+    "Ukrainian Village": 24, # West Town
+    "Little Italy": 28,      # Near West Side
+    "Little Village": 30,    # South Lawndale
+    "Andersonville": 77,     # Edgewater
+    "Bronzeville": 35,       # Douglas
+    "Ravenswood": 4,         # Lincoln Square
+    "Roscoe Village": 5,     # North Center
+}
+
+# Pre-computed reverse lookup: neighborhood name (lower) → community area number string
+_NAME_TO_CA: dict[str, str] = {}
+for _num, _name in COMMUNITY_AREA_MAP.items():
+    _NAME_TO_CA[_name.lower()] = str(_num)
+for _name, _num in NEIGHBORHOOD_TO_COMMUNITY_AREA.items():
+    _NAME_TO_CA[_name.lower()] = str(_num)
+
+
+def neighborhood_to_ca(name: str) -> str:
+    """Return community area number as string, or empty string if not found."""
+    return _NAME_TO_CA.get(name.lower(), "")
+
+
 # Census tract (6-digit FIPS) → community area number
 # Source: Chicago Data Portal Census Tracts Boundaries (74p9-q2aq)
 TRACT_TO_COMMUNITY_AREA: dict[str, int] = {
