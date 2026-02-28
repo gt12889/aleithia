@@ -3,6 +3,7 @@ import Spline from '@splinetool/react-spline'
 import type { Application } from '@splinetool/runtime'
 import CityGlobe from './CityGlobe'
 import LogoLoop from './LogoLoop'
+import { ModalLogo, SuperMemoryLogo, ArizeAILogo, OpenAILogo, ModelLogo } from './SponsorLogos'
 
 interface Props {
   onGetStarted: () => void
@@ -27,14 +28,14 @@ function tuneScene(app: Application) {
   })
 }
 
-const SPONSORS = [
-  { name: 'Modal' },
-  { name: 'SuperMemory' },
-  { name: 'Arize AI' },
-  { name: 'OpenAI' },
-  { name: 'GPT-4o' },
-  { name: 'Claude' },
-  { name: 'Cursor Agent' },
+const SPONSOR_LOGOS = [
+  { node: <ModalLogo /> },
+  { node: <SuperMemoryLogo /> },
+  { node: <ArizeAILogo /> },
+  { node: <OpenAILogo /> },
+  { node: <ModelLogo name="Qwen3-8B" /> },
+  { node: <ModelLogo name="BART-large-MNLI" /> },
+  { node: <ModelLogo name="RoBERTa-Sentiment" /> },
 ]
 
 const STATS = [
@@ -137,16 +138,16 @@ export default function LandingPage({ onGetStarted }: Props) {
           Sponsored by
         </p>
         <LogoLoop
-          logos={SPONSORS.map((s) => ({
+          logos={SPONSOR_LOGOS.map((s) => ({
             node: (
-              <span className="text-sm font-semibold tracking-wide text-white/40 hover:text-white/70 transition-colors uppercase">
-                {s.name}
+              <span className="text-white/30 hover:text-white/60 transition-colors">
+                {s.node}
               </span>
             ),
           }))}
           speed={40}
           gap={64}
-          logoHeight={24}
+          logoHeight={28}
           pauseOnHover
           fadeOut
           fadeOutColor="#06080d"
