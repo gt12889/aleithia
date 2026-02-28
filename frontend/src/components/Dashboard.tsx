@@ -13,8 +13,9 @@ import NewsFeed from './NewsFeed.tsx'
 import DemographicsCard from './DemographicsCard.tsx'
 import PipelineMonitor from './PipelineMonitor.tsx'
 import AgentSwarm from './AgentSwarm.tsx'
+import MLMonitor from './MLMonitor.tsx'
 
-type Tab = 'overview' | 'inspections' | 'permits' | 'licenses' | 'news'
+type Tab = 'overview' | 'inspections' | 'permits' | 'licenses' | 'news' | 'models'
 
 interface AgentInfo {
   agents_deployed: number
@@ -265,6 +266,7 @@ export default function Dashboard({ profile, onReset }: Props) {
     { key: 'permits', label: 'Permits', count: neighborhoodData?.permit_count },
     { key: 'licenses', label: 'Licenses', count: neighborhoodData?.license_count },
     { key: 'news', label: 'Intel', count: (neighborhoodData?.news.length || 0) + (neighborhoodData?.politics.length || 0) },
+    { key: 'models', label: 'Models' },
   ]
 
   return (
@@ -418,6 +420,10 @@ export default function Dashboard({ profile, onReset }: Props) {
 
               {activeTab === 'news' && neighborhoodData && (
                 <NewsFeed news={neighborhoodData.news} politics={neighborhoodData.politics} />
+              )}
+
+              {activeTab === 'models' && (
+                <MLMonitor />
               )}
             </>
           )}

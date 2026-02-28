@@ -11,7 +11,7 @@ app = modal.App("alethia-training-data")
 volume = modal.Volume.from_name("alethia-data", create_if_missing=True)
 
 image = modal.Image.debian_slim(python_version="3.12").pip_install(
-    "vllm", "huggingface_hub[hf_transfer]"
+    "vllm>=0.8.0", "transformers>=4.45.0,<4.52.0", "huggingface_hub[hf_transfer]"
 ).env({"HF_HUB_ENABLE_HF_TRANSFER": "1", "VLLM_USE_V1": "1"})
 
 weights_vol = modal.Volume.from_name("alethia-weights", create_if_missing=True)
@@ -19,7 +19,7 @@ weights_vol = modal.Volume.from_name("alethia-weights", create_if_missing=True)
 
 @app.function(
     image=image,
-    gpu=modal.gpu.H100(),
+    gpu="H100",
     volumes={"/data": volume, "/models": weights_vol},
     timeout=3600,
 )
