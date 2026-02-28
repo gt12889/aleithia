@@ -1,4 +1,5 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect } from 'react'
+import { SignedIn, SignedOut, SignInButton, SignUpButton, useClerk, useUser } from '@clerk/clerk-react'
 import type { UserProfile, NeighborhoodData, DataSources, ChatMessage, RiskScore } from '../types/index.ts'
 import { api, streamChat } from '../api.ts'
 import RiskCard from './RiskCard.tsx'
@@ -119,6 +120,8 @@ interface Props {
 }
 
 export default function Dashboard({ profile, onReset }: Props) {
+  const { signOut } = useClerk()
+  const { user } = useUser()
   const [neighborhoodData, setNeighborhoodData] = useState<NeighborhoodData | null>(null)
   const [sources, setSources] = useState<DataSources | null>(null)
   const [riskScore, setRiskScore] = useState<RiskScore | null>(null)
@@ -132,7 +135,7 @@ export default function Dashboard({ profile, onReset }: Props) {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [activeTab, setActiveTab] = useState<Tab>('overview')
-  const userIdRef = useRef(`user_${Date.now()}`)
+  const userId = user?.id ?? `anon_${Date.now()}`
 
   useEffect(() => {
     let cancelled = false
@@ -201,6 +204,16 @@ export default function Dashboard({ profile, onReset }: Props) {
         onDone: () => {
           setIsStreaming(false)
           setChatLoading(false)
+
+          if (user) {
+            api.saveUserSettings(user.id, profile.business_type, profile.neighborhood).catch(() => {})
+          }
+
+          setMessages(prev => {
+            const updated = [...prev]
+            updated[updated.length - 1] = { ...updated[updated.length - 1], timestamp: new Date() }
+            return updated
+          })
         },
         onError: (_errorMsg) => {
           // Fallback to local response
@@ -257,7 +270,7 @@ export default function Dashboard({ profile, onReset }: Props) {
           })
           setChatLoading(false)
         },
-      }, userIdRef.current)
+      }, userId)
     } catch {
       setIsStreaming(false)
       setChatLoading(false)
@@ -285,8 +298,29 @@ export default function Dashboard({ profile, onReset }: Props) {
             {profile.business_type} <span className="text-white/10 mx-1">/</span> <span className="text-white/50">{profile.neighborhood}</span>
           </span>
         </div>
-        <div className="flex items-center gap-5">
+        <div className="flex items-center gap-3">
           <Timer running={loading} />
+
+          <SignedOut>
+            <SignInButton mode="modal">
+              <button className="text-[10px] font-mono uppercase tracking-wider text-white/30 hover:text-white/60 transition-colors cursor-pointer">
+                Log in
+              </button>
+            </SignInButton>
+            <SignUpButton mode="modal">
+              <button className="text-[10px] font-mono uppercase tracking-wider text-white/30 hover:text-white/60 transition-colors cursor-pointer">
+                Sign up
+              </button>
+            </SignUpButton>
+          </SignedOut>
+
+          <SignedIn>
+            {user && <span className="text-[10px] font-mono text-white/25">{user.primaryEmailAddress?.emailAddress}</span>}
+            <button onClick={() => signOut()} className="text-[10px] font-mono uppercase tracking-wider text-white/20 hover:text-white/50 transition-colors cursor-pointer">
+              Sign out
+            </button>
+          </SignedIn>
+
           <button onClick={onReset} className="text-[10px] font-mono uppercase tracking-wider text-white/20 hover:text-white/50 transition-colors cursor-pointer">
             New Search
           </button>

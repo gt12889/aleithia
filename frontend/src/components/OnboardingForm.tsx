@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import type { UserProfile } from '../types/index.ts'
 
 const NEIGHBORHOODS = [
@@ -18,11 +18,21 @@ const BUSINESS_TYPES = [
 
 interface Props {
   onSubmit: (profile: UserProfile) => void
+  initialProfile?: UserProfile | null
 }
 
-export default function OnboardingForm({ onSubmit }: Props) {
-  const [businessType, setBusinessType] = useState('')
-  const [neighborhood, setNeighborhood] = useState('')
+export default function OnboardingForm({ onSubmit, initialProfile }: Props) {
+  const [businessType, setBusinessType] = useState(initialProfile?.business_type ?? '')
+  const [neighborhood, setNeighborhood] = useState(initialProfile?.neighborhood ?? '')
+
+  useEffect(() => {
+    if (initialProfile?.business_type) {
+      setBusinessType(initialProfile.business_type)
+    }
+    if (initialProfile?.neighborhood) {
+      setNeighborhood(initialProfile.neighborhood)
+    }
+  }, [initialProfile])
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault()
