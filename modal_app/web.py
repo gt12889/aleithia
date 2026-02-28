@@ -512,6 +512,36 @@ async def licenses_list(neighborhood: str = ""):
     return licenses[:100]
 
 
+def _aggregate_city_demographics() -> dict:
+    """Intentionally aggregate all tracts for city-wide statistics."""
+    demos = _load_docs("demographics", limit=1500)
+    tract_data = [d.get("metadata", {}).get("demographics", {}) for d in demos
+                  if d.get("metadata", {}).get("demographics", {}).get("total_population", 0) > 0]
+    if not tract_data:
+        return {}
+
+    total_pop = sum(t.get("total_population", 0) for t in tract_data)
+    if total_pop == 0:
+        return {}
+
+    def wavg(field: str) -> float:
+        return sum(t.get(field, 0) * t.get("total_population", 0) for t in tract_data) / total_pop
+
+    return {
+        "total_population": int(total_pop),
+        "median_household_income": round(wavg("median_household_income")),
+        "median_home_value": round(wavg("median_home_value")),
+        "median_gross_rent": round(wavg("median_gross_rent")),
+        "unemployment_rate": round(wavg("unemployment_rate"), 1),
+        "median_age": round(wavg("median_age"), 1),
+        "total_housing_units": int(sum(t.get("total_housing_units", 0) for t in tract_data)),
+        "renter_pct": round(wavg("renter_pct"), 1),
+        "bachelors_degree": int(sum(t.get("bachelors_degree", 0) for t in tract_data)),
+        "masters_degree": int(sum(t.get("masters_degree", 0) for t in tract_data)),
+        "tracts_counted": len(tract_data),
+    }
+
+
 @web_app.get("/summary")
 async def summary():
     """City-wide summary stats."""
@@ -524,7 +554,7 @@ async def summary():
             source_counts[source] = count
             total_docs += count
 
-    demographics = _aggregate_demographics("Loop")  # city-wide fallback
+    demographics = _aggregate_city_demographics()
 
     return {
         "total_documents": total_docs,

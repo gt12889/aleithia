@@ -4,6 +4,7 @@ Cadence: Weekly
 Sources: LoopNet (fallback to placeholders for demo)
 Pattern: async + FallbackChain (LoopNet → placeholders → cache) + gather_with_limit
 """
+import hashlib
 import json
 import os
 from datetime import datetime, timezone
@@ -13,6 +14,7 @@ import httpx
 import modal
 
 from modal_app.common import Document, SourceType, CHICAGO_NEIGHBORHOODS, detect_neighborhood, gather_with_limit
+from modal_app.dedup import SeenSet
 from modal_app.fallback import FallbackChain
 from modal_app.volume import app, volume, base_image, RAW_DATA_PATH
 
@@ -49,7 +51,7 @@ async def _fetch_loopnet_area(area: str) -> list[dict]:
 
         for listing in listings[:10]:
             docs.append({
-                "id": f"realestate-{listing.get('id', hash(str(listing)))}",
+                "id": f"realestate-{listing.get('id', hashlib.md5(str(listing).encode()).hexdigest()[:12])}",
                 "source": SourceType.REAL_ESTATE.value,
                 "title": listing.get("title", listing.get("address", f"Commercial Property in {area}")),
                 "content": (
@@ -189,16 +191,30 @@ async def realestate_ingester():
         print("Real estate ingester: no data from any source")
         return 0
 
+    # Dedup: skip already-seen documents
+    seen = SeenSet("realestate")
+    new_docs = [d for d in all_docs if not seen.contains(d["id"])]
+    print(f"Real estate: {len(all_docs)} fetched, {len(new_docs)} new (deduped {len(all_docs) - len(new_docs)})")
+
+    if not new_docs:
+        seen.save()
+        await volume.commit.aio()
+        print("Real estate ingester: no new documents")
+        return 0
+
     # Save to volume
     date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     out_dir = Path(RAW_DATA_PATH) / "realestate" / date_str
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    for doc_data in all_docs:
+    for doc_data in new_docs:
+        doc_data["status"] = "raw"
         doc = Document(**{k: v for k, v in doc_data.items() if k != "timestamp"})
         fpath = out_dir / f"{doc.id}.json"
         fpath.write_text(doc.model_dump_json(indent=2))
+        seen.add(doc_data["id"])
 
+    seen.save()
     await volume.commit.aio()
-    print(f"Real estate ingester complete: {len(all_docs)} documents saved to {out_dir}")
-    return len(all_docs)
+    print(f"Real estate ingester complete: {len(new_docs)} documents saved to {out_dir}")
+    return len(new_docs)

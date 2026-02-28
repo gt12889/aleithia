@@ -12,13 +12,19 @@ import httpx
 import modal
 
 from modal_app.common import Document, SourceType, detect_neighborhood
+from modal_app.dedup import SeenSet
 from modal_app.fallback import FallbackChain
 from modal_app.volume import app, volume, base_image, RAW_DATA_PATH
 
 FEDERAL_REGISTER_BASE = "https://www.federalregister.gov/api/v1"
 
-# Agencies relevant to small businesses
-TARGET_AGENCIES = ["SBA", "FDA", "OSHA", "EPA"]
+# Agencies relevant to small businesses (slug → display label)
+TARGET_AGENCIES = {
+    "small-business-administration": "SBA",
+    "food-and-drug-administration": "FDA",
+    "occupational-safety-and-health-administration": "OSHA",
+    "environmental-protection-agency": "EPA",
+}
 
 # Keywords for filtering relevant documents
 BUSINESS_KEYWORDS = [
@@ -35,12 +41,12 @@ async def _fetch_federal_register(since_days: int = 7) -> list[dict]:
     since = (datetime.now(timezone.utc) - timedelta(days=since_days)).strftime("%Y-%m-%d")
 
     async with httpx.AsyncClient(timeout=30) as client:
-        for agency in TARGET_AGENCIES:
+        for agency_slug, agency_label in TARGET_AGENCIES.items():
             try:
                 resp = await client.get(
                     f"{FEDERAL_REGISTER_BASE}/documents.json",
                     params={
-                        "conditions[agencies][]": agency,
+                        "conditions[agencies][]": agency_slug,
                         "conditions[publication_date][gte]": since,
                         "per_page": 20,
                         "order": "newest",
@@ -52,7 +58,7 @@ async def _fetch_federal_register(since_days: int = 7) -> list[dict]:
                     },
                 )
                 if resp.status_code != 200:
-                    print(f"Federal Register [{agency}]: HTTP {resp.status_code}")
+                    print(f"Federal Register [{agency_label}]: HTTP {resp.status_code}")
                     continue
 
                 results = resp.json().get("results", [])
@@ -75,7 +81,7 @@ async def _fetch_federal_register(since_days: int = 7) -> list[dict]:
                         "url": result.get("html_url", ""),
                         "timestamp": result.get("publication_date", datetime.now(timezone.utc).isoformat()),
                         "metadata": {
-                            "agency": agency,
+                            "agency": agency_label,
                             "document_type": result.get("type", ""),
                             "action": result.get("action", ""),
                             "document_number": result.get("document_number", ""),
@@ -84,10 +90,10 @@ async def _fetch_federal_register(since_days: int = 7) -> list[dict]:
                         "geo": {"neighborhood": neighborhood} if neighborhood else {},
                     })
 
-                print(f"Federal Register [{agency}]: {len([d for d in docs if d.get('metadata', {}).get('agency') == agency])} relevant docs")
+                print(f"Federal Register [{agency_label}]: {len([d for d in docs if d.get('metadata', {}).get('agency') == agency_label])} relevant docs")
 
             except Exception as e:
-                print(f"Federal Register [{agency}] error: {e}")
+                print(f"Federal Register [{agency_label}] error: {e}")
 
     return docs
 
@@ -160,16 +166,30 @@ async def federal_register_ingester():
         print("Federal Register ingester: no relevant documents found")
         return 0
 
+    # Dedup: skip already-seen documents
+    seen = SeenSet("federal_register")
+    new_docs = [d for d in all_docs if not seen.contains(d["id"])]
+    print(f"Federal Register: {len(all_docs)} fetched, {len(new_docs)} new (deduped {len(all_docs) - len(new_docs)})")
+
+    if not new_docs:
+        seen.save()
+        await volume.commit.aio()
+        print("Federal Register ingester: no new documents")
+        return 0
+
     # Save to volume
     date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     out_dir = Path(RAW_DATA_PATH) / "federal_register" / date_str
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    for doc_data in all_docs:
+    for doc_data in new_docs:
+        doc_data["status"] = "raw"
         doc = Document(**{k: v for k, v in doc_data.items() if k != "timestamp"})
         fpath = out_dir / f"{doc.id}.json"
         fpath.write_text(doc.model_dump_json(indent=2))
+        seen.add(doc_data["id"])
 
+    seen.save()
     await volume.commit.aio()
-    print(f"Federal Register ingester complete: {len(all_docs)} documents saved to {out_dir}")
-    return len(all_docs)
+    print(f"Federal Register ingester complete: {len(new_docs)} documents saved to {out_dir}")
+    return len(new_docs)

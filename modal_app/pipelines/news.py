@@ -4,6 +4,7 @@ Cadence: Every 30 minutes
 Sources: RSS (Block Club Chicago, Chicago Tribune, Crain's), NewsAPI
 Pattern: async + FallbackChain + gather_with_limit + detect_neighborhood
 """
+import hashlib
 import json
 import os
 from datetime import datetime, timezone, timedelta
@@ -14,14 +15,15 @@ import httpx
 import modal
 
 from modal_app.common import Document, SourceType, detect_neighborhood, gather_with_limit
+from modal_app.dedup import SeenSet
 from modal_app.fallback import FallbackChain
 from modal_app.volume import app, volume, base_image, RAW_DATA_PATH
 
 # RSS feeds for Chicago local news
 RSS_FEEDS = [
     ("Block Club Chicago", "https://blockclubchicago.org/feed/"),
-    ("Chicago Tribune Local", "https://www.chicagotribune.com/arcio/rss/category/news/local/"),
-    ("Crain's Chicago Business", "https://www.chicagobusiness.com/section/news.rss"),
+    ("Chicago Tribune", "https://www.chicagotribune.com/feed/"),
+    ("Chicago Sun-Times", "https://chicago.suntimes.com/rss/index.xml"),
 ]
 
 # Google News RSS fallback
@@ -43,7 +45,7 @@ NEWSAPI_KEYWORDS = [
 async def _fetch_single_rss(feed_name: str, feed_url: str) -> list[dict]:
     """Parse a single RSS feed and return serializable dicts."""
     docs = []
-    async with httpx.AsyncClient(timeout=15) as client:
+    async with httpx.AsyncClient(timeout=15, follow_redirects=True) as client:
         resp = await client.get(feed_url)
         if resp.status_code != 200:
             print(f"RSS [{feed_name}]: HTTP {resp.status_code}")
@@ -62,7 +64,7 @@ async def _fetch_single_rss(feed_name: str, feed_url: str) -> list[dict]:
         neighborhood = detect_neighborhood(f"{title} {content}")
 
         docs.append({
-            "id": f"news-rss-{hash(entry.get('link', title))}",
+            "id": f"news-rss-{hashlib.md5((entry.get('link', '') or title).encode()).hexdigest()[:12]}",
             "source": SourceType.NEWS.value,
             "title": title,
             "content": content,
@@ -110,7 +112,7 @@ async def _fetch_newsapi(api_key: str) -> list[dict]:
     since = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
 
     async def _fetch_keyword(keyword: str) -> list[dict]:
-        async with httpx.AsyncClient(timeout=15) as client:
+        async with httpx.AsyncClient(timeout=15, follow_redirects=True) as client:
             resp = await client.get(
                 "https://newsapi.org/v2/everything",
                 params={
@@ -133,7 +135,7 @@ async def _fetch_newsapi(api_key: str) -> list[dict]:
                 neighborhood = detect_neighborhood(f"{title} {content}")
 
                 keyword_docs.append({
-                    "id": f"news-api-{hash(article.get('url', ''))}",
+                    "id": f"news-api-{hashlib.md5((article.get('url', '') or '').encode()).hexdigest()[:12]}",
                     "source": SourceType.NEWS.value,
                     "title": title,
                     "content": content,
@@ -191,24 +193,38 @@ async def news_ingester():
     except Exception as e:
         print(f"NewsAPI error: {e}")
 
-    # Save to volume
+    # Dedup: skip already-seen documents
+    seen = SeenSet("news")
+    new_docs = [d for d in all_docs if not seen.contains(d["id"])]
+    print(f"News: {len(all_docs)} fetched, {len(new_docs)} new (deduped {len(all_docs) - len(new_docs)})")
+
+    if not new_docs:
+        seen.save()
+        await volume.commit.aio()
+        print("News ingester: no new documents")
+        return 0
+
+    # Save new docs to volume
     date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d_%H%M")
     out_dir = Path(RAW_DATA_PATH) / "news" / date_str
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    for doc_data in all_docs:
+    for doc_data in new_docs:
+        doc_data["status"] = "raw"
         doc = Document(**{k: v for k, v in doc_data.items() if k != "timestamp"})
         fpath = out_dir / f"{doc.id}.json"
         fpath.write_text(doc.model_dump_json(indent=2))
+        seen.add(doc_data["id"])
 
     # Push to classification queue
     from modal_app.classify import doc_queue
-    for doc_data in all_docs:
+    for doc_data in new_docs:
         try:
             await doc_queue.put.aio(doc_data)
         except Exception:
             pass
 
+    seen.save()
     await volume.commit.aio()
-    print(f"News ingester complete: {len(all_docs)} documents saved to {out_dir}")
-    return len(all_docs)
+    print(f"News ingester complete: {len(new_docs)} documents saved to {out_dir}")
+    return len(new_docs)

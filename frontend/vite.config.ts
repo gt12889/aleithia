@@ -9,7 +9,7 @@ export default defineConfig({
     port: 5173,
     proxy: {
       '/api/data': {
-        target: 'https://gt12889--alethia-serve.modal.run',
+        target: 'https://ibsrinivas27--alethia-serve.modal.run',
         changeOrigin: true,
         rewrite: (path) => path.replace(/^\/api\/data/, ''),
       },

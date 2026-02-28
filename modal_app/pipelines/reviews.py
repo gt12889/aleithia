@@ -13,6 +13,7 @@ import httpx
 import modal
 
 from modal_app.common import Document, SourceType, CHICAGO_NEIGHBORHOODS, detect_neighborhood, gather_with_limit
+from modal_app.dedup import SeenSet
 from modal_app.fallback import FallbackChain
 from modal_app.volume import app, volume, base_image, RAW_DATA_PATH
 
@@ -217,16 +218,30 @@ async def review_ingester():
     # Compute review velocity
     _compute_review_velocity(all_docs)
 
+    # Dedup: skip already-seen documents
+    seen = SeenSet("reviews")
+    new_docs = [d for d in all_docs if not seen.contains(d["id"])]
+    print(f"Reviews: {len(all_docs)} fetched, {len(new_docs)} new (deduped {len(all_docs) - len(new_docs)})")
+
+    if not new_docs:
+        seen.save()
+        await volume.commit.aio()
+        print("Review ingester: no new documents")
+        return 0
+
     # Save to volume
     date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     out_dir = Path(RAW_DATA_PATH) / "reviews" / date_str
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    for doc_data in all_docs:
+    for doc_data in new_docs:
+        doc_data["status"] = "raw"
         doc = Document(**{k: v for k, v in doc_data.items() if k != "timestamp"})
         fpath = out_dir / f"{doc.id}.json"
         fpath.write_text(doc.model_dump_json(indent=2))
+        seen.add(doc_data["id"])
 
+    seen.save()
     await volume.commit.aio()
-    print(f"Review ingester complete: {len(all_docs)} documents saved to {out_dir}")
-    return len(all_docs)
+    print(f"Review ingester complete: {len(new_docs)} documents saved to {out_dir}")
+    return len(new_docs)
