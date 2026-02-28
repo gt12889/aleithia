@@ -25,3 +25,4 @@ if not _os.environ.get("MODAL_IS_REMOTE"):
     from modal_app.pipelines import reviews  # noqa: F401
     from modal_app.pipelines import realestate  # noqa: F401
     from modal_app.pipelines import federal_register  # noqa: F401
+    from modal_app.pipelines import tiktok  # noqa: F401
