@@ -125,7 +125,6 @@ async def _fetch_census_no_key() -> list[dict]:
     image=data_image,
     volumes={"/data": volume},
     secrets=[modal.Secret.from_name("alethia-secrets")],
-    schedule=modal.Period(days=30),
     timeout=180,
 )
 async def demographics_ingester():

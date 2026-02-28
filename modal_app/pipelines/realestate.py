@@ -174,7 +174,6 @@ async def _create_placeholder_listings() -> list[dict]:
     image=base_image,
     volumes={"/data": volume},
     secrets=[modal.Secret.from_name("alethia-secrets")],
-    schedule=modal.Period(days=7),
     timeout=180,
 )
 async def realestate_ingester():
