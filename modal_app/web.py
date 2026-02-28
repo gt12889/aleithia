@@ -1,6 +1,7 @@
 """Modal-hosted FastAPI web API — replaces local backend.
 
 Endpoints: /chat (streaming SSE), /brief, /alerts, /status, /metrics, /sources, /neighborhood
+           /news, /politics, /inspections, /permits, /licenses, /summary
 Modal features: @modal.asgi_app, streaming SSE
 """
 import json
@@ -16,7 +17,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 
 from modal_app.volume import app, volume, web_image, VOLUME_MOUNT, RAW_DATA_PATH, PROCESSED_DATA_PATH
-from modal_app.common import CHICAGO_NEIGHBORHOODS, COMMUNITY_AREA_MAP
+from modal_app.common import CHICAGO_NEIGHBORHOODS, COMMUNITY_AREA_MAP, detect_neighborhood
 
 web_app = FastAPI(title="Alethia API", version="2.0")
 
@@ -44,15 +45,128 @@ def _load_docs(source: str, limit: int = 200) -> list[dict]:
 
 
 def _filter_by_neighborhood(docs: list[dict], neighborhood: str) -> list[dict]:
-    """Filter documents by neighborhood."""
+    """Filter documents by neighborhood with multi-strategy matching."""
     if not neighborhood:
         return docs
     nb_lower = neighborhood.lower()
-    return [
-        d for d in docs
-        if d.get("geo", {}).get("neighborhood", "").lower() == nb_lower
-        or nb_lower in d.get("content", "").lower()
-    ]
+
+    # Reverse lookup: find community area number for this neighborhood
+    nb_community_area = None
+    for ca_num, ca_name in COMMUNITY_AREA_MAP.items():
+        if ca_name.lower() == nb_lower:
+            nb_community_area = str(ca_num)
+            break
+
+    matched = []
+    for d in docs:
+        geo = d.get("geo", {})
+        # Match by geo.neighborhood field
+        if geo.get("neighborhood", "").lower() == nb_lower:
+            matched.append(d)
+            continue
+        # Match by community_area number
+        if nb_community_area and geo.get("community_area") == nb_community_area:
+            matched.append(d)
+            continue
+        # Match by content text (check title first, then content)
+        title = d.get("title", "").lower()
+        if nb_lower in title:
+            matched.append(d)
+            continue
+        # Content match — only for multi-word neighborhoods to avoid false positives
+        if len(nb_lower) > 4 and nb_lower in d.get("content", "").lower()[:500]:
+            matched.append(d)
+            continue
+    return matched
+
+
+def _aggregate_demographics(neighborhood: str) -> dict:
+    """Aggregate census demographics for a neighborhood from raw demographics docs."""
+    demos = _load_docs("demographics", limit=1500)
+    nb_lower = neighborhood.lower()
+
+    # Try to match demographics by community area or content
+    nb_community_area = None
+    for ca_num, ca_name in COMMUNITY_AREA_MAP.items():
+        if ca_name.lower() == nb_lower:
+            nb_community_area = str(ca_num)
+            break
+
+    # Collect matching tract data
+    tract_data = []
+    for d in demos:
+        meta_demos = d.get("metadata", {}).get("demographics", {})
+        if not meta_demos:
+            continue
+        geo = d.get("geo", {})
+        # Match by community area or content
+        if nb_community_area and geo.get("community_area") == nb_community_area:
+            tract_data.append(meta_demos)
+        elif nb_lower in d.get("content", "").lower()[:200]:
+            tract_data.append(meta_demos)
+
+    if not tract_data:
+        # Fall back to city-wide averages from all tracts
+        for d in demos[:200]:
+            meta_demos = d.get("metadata", {}).get("demographics", {})
+            if meta_demos and meta_demos.get("total_population", 0) > 0:
+                tract_data.append(meta_demos)
+
+    if not tract_data:
+        return {}
+
+    # Aggregate: weighted average by population for rates, sum for counts
+    total_pop = sum(t.get("total_population", 0) for t in tract_data)
+    if total_pop == 0:
+        return {}
+
+    def wavg(field: str) -> float:
+        return sum(t.get(field, 0) * t.get("total_population", 0) for t in tract_data) / total_pop
+
+    return {
+        "total_population": int(total_pop),
+        "median_household_income": round(wavg("median_household_income")),
+        "median_home_value": round(wavg("median_home_value")),
+        "median_gross_rent": round(wavg("median_gross_rent")),
+        "unemployment_rate": round(wavg("unemployment_rate"), 1),
+        "median_age": round(wavg("median_age"), 1),
+        "total_housing_units": int(sum(t.get("total_housing_units", 0) for t in tract_data)),
+        "renter_pct": round(wavg("renter_pct"), 1),
+        "bachelors_degree": int(sum(t.get("bachelors_degree", 0) for t in tract_data)),
+        "masters_degree": int(sum(t.get("masters_degree", 0) for t in tract_data)),
+        "tracts_counted": len(tract_data),
+    }
+
+
+def _compute_metrics(name: str, inspections: list, permits: list, licenses: list, news: list, politics: list) -> dict:
+    """Compute neighborhood metrics from actual data instead of relying on pre-computed geo file."""
+    total_inspections = len(inspections)
+    failed = sum(1 for i in inspections if i.get("metadata", {}).get("raw_record", {}).get("results") in ("Fail", "Out of Business"))
+
+    # Regulatory density: normalized inspection volume (0-100 scale)
+    regulatory_density = min(100, total_inspections * 5) if total_inspections > 0 else 0
+
+    # Business activity: normalized license count (0-100 scale)
+    business_activity = min(100, len(licenses) * 8) if licenses else 0
+
+    # Risk score: based on inspection fail rate
+    fail_rate = (failed / total_inspections) if total_inspections > 0 else 0
+    risk_score = round(min(10, 2 + fail_rate * 6 + (len(licenses) > 10) + (len(politics) > 3)), 1)
+
+    # Sentiment: placeholder based on news volume (more news = more activity = higher)
+    sentiment = min(100, len(news) * 10) if news else 0
+
+    return {
+        "neighborhood": name,
+        "regulatory_density": round(regulatory_density, 1),
+        "business_activity": round(business_activity, 1),
+        "sentiment": round(sentiment, 1),
+        "risk_score": risk_score,
+        "active_permits": len(permits),
+        "crime_incidents_30d": 0,
+        "avg_review_rating": 0.0,
+        "review_count": 0,
+    }
 
 
 @web_app.post("/chat")
@@ -253,29 +367,33 @@ async def neighborhood(name: str):
         elif dataset == "business_licenses":
             licenses.append(doc)
 
-    news_docs = _filter_by_neighborhood(_load_docs("news"), name)
-    politics_docs = _filter_by_neighborhood(_load_docs("politics"), name)
+    # Load news and politics with improved matching
+    all_news = _load_docs("news")
+    all_politics = _load_docs("politics")
+
+    news_docs = _filter_by_neighborhood(all_news, name)
+    politics_docs = _filter_by_neighborhood(all_politics, name)
+
+    # If no neighborhood-specific news/politics, include recent global items
+    if not news_docs and all_news:
+        news_docs = all_news[:5]
+    if not politics_docs and all_politics:
+        politics_docs = all_politics[:5]
 
     # Compute inspection stats
     failed = sum(1 for i in inspections if i.get("metadata", {}).get("raw_record", {}).get("results") in ("Fail", "Out of Business"))
     passed = sum(1 for i in inspections if i.get("metadata", {}).get("raw_record", {}).get("results") == "Pass")
 
-    # Load geo metrics
-    geo_path = Path(PROCESSED_DATA_PATH) / "geo" / "neighborhood_metrics.json"
-    metrics = {}
-    if geo_path.exists():
-        try:
-            geojson = json.loads(geo_path.read_text())
-            for feature in geojson.get("features", []):
-                if feature.get("properties", {}).get("neighborhood", "").lower() == name.lower():
-                    metrics = feature["properties"]
-                    break
-        except Exception:
-            pass
+    # Compute metrics from actual data
+    computed_metrics = _compute_metrics(name, inspections, permits, licenses, news_docs, politics_docs)
+
+    # Load demographics
+    demographics = _aggregate_demographics(name)
 
     return {
         "neighborhood": name,
-        "metrics": metrics,
+        "metrics": computed_metrics,
+        "demographics": demographics,
         "inspections": inspections[:50],
         "permits": permits[:50],
         "licenses": licenses[:50],
@@ -288,6 +406,75 @@ async def neighborhood(name: str):
         },
         "permit_count": len(permits),
         "license_count": len(licenses),
+    }
+
+
+# ── Standalone data endpoints (used by api.ts) ──────────────────────────────
+
+@web_app.get("/news")
+async def news_list():
+    """All recent news articles."""
+    docs = _load_docs("news", limit=50)
+    return docs
+
+
+@web_app.get("/politics")
+async def politics_list():
+    """All recent politics/council items."""
+    docs = _load_docs("politics", limit=50)
+    return docs
+
+
+@web_app.get("/inspections")
+async def inspections_list(neighborhood: str = "", result: str = ""):
+    """Food inspection records, optionally filtered."""
+    public_docs = _load_docs("public_data", limit=500)
+    inspections = [d for d in public_docs if d.get("metadata", {}).get("dataset") == "food_inspections"]
+    if neighborhood:
+        inspections = _filter_by_neighborhood(inspections, neighborhood)
+    if result:
+        inspections = [i for i in inspections if i.get("metadata", {}).get("raw_record", {}).get("results", "").lower() == result.lower()]
+    return inspections[:100]
+
+
+@web_app.get("/permits")
+async def permits_list(neighborhood: str = ""):
+    """Building permit records, optionally filtered."""
+    public_docs = _load_docs("public_data", limit=500)
+    permits = [d for d in public_docs if d.get("metadata", {}).get("dataset") == "building_permits"]
+    if neighborhood:
+        permits = _filter_by_neighborhood(permits, neighborhood)
+    return permits[:100]
+
+
+@web_app.get("/licenses")
+async def licenses_list(neighborhood: str = ""):
+    """Business license records, optionally filtered."""
+    public_docs = _load_docs("public_data", limit=500)
+    licenses = [d for d in public_docs if d.get("metadata", {}).get("dataset") == "business_licenses"]
+    if neighborhood:
+        licenses = _filter_by_neighborhood(licenses, neighborhood)
+    return licenses[:100]
+
+
+@web_app.get("/summary")
+async def summary():
+    """City-wide summary stats."""
+    total_docs = 0
+    source_counts = {}
+    for source in ["news", "politics", "public_data", "demographics", "realestate"]:
+        source_dir = Path(RAW_DATA_PATH) / source
+        if source_dir.exists():
+            count = len(list(source_dir.rglob("*.json")))
+            source_counts[source] = count
+            total_docs += count
+
+    demographics = _aggregate_demographics("Loop")  # city-wide fallback
+
+    return {
+        "total_documents": total_docs,
+        "source_counts": source_counts,
+        "demographics": demographics,
     }
 
 

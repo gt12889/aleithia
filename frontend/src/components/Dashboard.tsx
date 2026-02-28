@@ -355,7 +355,7 @@ export default function Dashboard({ profile, onReset }: Props) {
                   <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
                     {riskScore && <RiskCard score={riskScore} />}
                     {neighborhoodData?.metrics && (
-                      <DemographicsCard metrics={neighborhoodData.metrics} />
+                      <DemographicsCard metrics={neighborhoodData.metrics} demographics={neighborhoodData.demographics} />
                     )}
                   </div>
 
