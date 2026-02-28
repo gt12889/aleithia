@@ -146,13 +146,6 @@ export default function LandingPage({ onGetStarted, onViewSource }: Props) {
                   Sign out
                 </button>
               </SignedIn>
-
-              <button
-                onClick={onGetStarted}
-                className="px-6 py-2 text-sm font-medium bg-white text-[#06080d] hover:bg-gray-200 transition-colors cursor-pointer"
-              >
-                Get Started
-              </button>
             </div>
           </nav>
 
