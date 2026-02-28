@@ -19,7 +19,7 @@ weights_vol = modal.Volume.from_name("alethia-weights", create_if_missing=True)
 
 @app.function(
     image=image,
-    gpu="H100",
+    gpu=modal.gpu.H100(),
     volumes={"/data": volume, "/models": weights_vol},
     timeout=3600,
 )
