@@ -13,6 +13,29 @@
 | Flat agent docs | Simplicity over hierarchy for hackathon pace | 2026-02-27 |
 | Name: Alethia | Greek "unconcealment" — truth revealed, not constructed. Fits regulatory transparency mission | 2026-02-27 |
 
+## Judging Strategy
+
+### What Wins Each Track
+
+| Track | What Judges Want | How Alethia Delivers |
+|-------|-----------------|---------------------|
+| Best Voyager Hack | Creativity, technical complexity, impact, execution | Novel regulatory AI + multi-track integration + social mission |
+| Modal AI Inference | Ambitious inference on Modal solving real-world problem | Run regulatory analysis models on Modal GPUs — not just API wrapping |
+| Best UI/UX | Intuitive, polished, delightful. Visual hierarchy, accessibility, seamless interaction | Premium dashboard that makes complex data feel effortless |
+| Best Social Impact | Tangible positive change addressing pressing societal issue | Directly addresses regulatory inequity for small businesses |
+| Supermemory | App that remembers, understands, adapts. Use multiple APIs | Store business profiles, regulatory context, past queries — app gets smarter per user |
+
+### Key Insight
+The social impact narrative is our strongest differentiator. Every demo moment should reinforce: "Big companies have teams of lawyers and analysts. We give that same power to a coffee shop owner." The technical sophistication (Modal, Supermemory) serves this story.
+
+### Demo Script Framework
+1. Meet our user: small business owner opening a restaurant in Illinois
+2. Show the regulatory complexity they face (the problem)
+3. Alethia aggregates and analyzes (Modal AI inference — show it working)
+4. Actionable recommendations appear (the solution)
+5. Come back later — Supermemory remembers their context (it adapts)
+6. Contrast: "A large firm has a team for this. Now you have Alethia."
+
 ## Domain Knowledge
 
 ### Regulatory Landscape

@@ -9,16 +9,28 @@
 - **Event:** HackIllinois 2026
 - **Repo:** https://github.com/gt12889/hackillinois2026
 
-## Tracks & Challenges
+## Tracks & Judging Criteria
 
-| Category | Track |
-|----------|-------|
-| General | Best Voyager Hack |
-| Sponsor | Modal (AI Inference) |
-| Challenge | Best UI/UX Design |
-| Challenge | Best Social Impact |
-| Sponsor | Best Use of Supermemory |
-| Sponsor | Best Use of Solana |
+### Best Voyager Hack (General Track)
+Awarded for exceptional innovation, functionality, and overall excellence. Judges look for: **creativity, technical complexity, impact, and execution.** Must demonstrate pushing boundaries of what's possible in 36 hours.
+
+### Best AI Inference — Modal (Sponsor Track)
+Modal is AI infrastructure for developers (used by Ramp, Suno, Lovable). Offers flexible GPU compute, code sandboxes, and storage. Judges want: **ambitious applications running inference on Modal to solve a real-world problem.**
+- Credits code: `VVN-YQS-E55` — redeem $250 at modal.com/credits
+- Prize claimed in Siebel Center immediately after closing ceremony
+
+### Best UI/UX Design (Challenge Track)
+Awarded to the most **intuitive, polished, and delightful** user experience. Judges evaluate: **thoughtful design decisions, strong visual hierarchy, accessibility, and seamless interaction — from first impression to final click.** The product must feel effortless to use and look great doing it.
+
+### Best Social Impact (Challenge Track)
+Recognizes the project with the most significant potential for **positive change or addressing a pressing societal issue.** Can address environmental concerns, accessibility, social injustices, and more. Must aim to make a **tangible difference** in the world.
+
+### Best Use of Supermemory (Sponsor Track)
+Use Supermemory's Context Engineering APIs to build an app that **remembers, understands, and adapts** to its users. Leverage: Retrieval, Memory, User Profiles, Connectors, or Multi-modal Extractors — or combine them all.
+- Free tier available; top up at Supermemory booth if credits run out
+
+### Best Use of Solana (Sponsor Track)
+_Criteria TBD — check prize page for details._
 
 ## Problem Statement
 

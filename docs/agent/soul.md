@@ -9,18 +9,23 @@ This is a hackathon with a social mission. We're building something that matters
 1. **Simple over clever** — Write code a tired hackathon teammate can read at 3am
 2. **MVP first** — Get it working, then make it good
 3. **Demo-driven** — Every feature should be visually demonstrable and tell a compelling story
-4. **Social impact first** — When choosing between features, pick the one that better serves small business owners
-5. **Delete over abstract** — If something isn't needed, remove it instead of abstracting it
-6. **Commit often** — Small, working increments over big-bang changes
+4. **Social impact first** — When choosing between features, pick the one that better serves small business owners. Judges want "tangible difference" and "pressing societal issue"
+5. **Ambitious inference** — Modal judges want ambitious applications. Don't just wrap an API — show real AI inference solving a real problem on Modal's infrastructure
+6. **Remember and adapt** — Supermemory judges want apps that remember, understand, and adapt to users. The more Supermemory APIs used (Retrieval, Memory, User Profiles, Connectors, Multi-modal Extractors), the better
+7. **Delete over abstract** — If something isn't needed, remove it instead of abstracting it
+8. **Commit often** — Small, working increments over big-bang changes
 
-## Design Philosophy
+## Design Philosophy (Best UI/UX Judging)
 
-We're competing for **Best UI/UX Design**. The interface should:
-- Feel like a premium product, not a hackathon project
-- Make complex regulatory data feel approachable and non-intimidating
-- Use clear visual hierarchy — the most important insight should be unmissable
-- Be accessible to non-technical small business owners
-- Show, don't tell — use visualizations over walls of text
+Judges evaluate: thoughtful design decisions, strong visual hierarchy, accessibility, and seamless interaction — from first impression to final click. The product must feel effortless.
+
+- **First impression matters** — landing/onboarding should immediately communicate value
+- **Visual hierarchy** — the most critical insight (risk, opportunity, action item) is unmissable
+- **Effortless interaction** — every click should feel purposeful, no dead ends or confusion
+- **Accessibility** — readable fonts, sufficient contrast, keyboard navigable
+- **Polish over features** — 3 polished screens beats 10 rough ones for UI/UX judges
+- **Approachable complexity** — make regulatory data feel simple, not intimidating
+- **Show, don't tell** — visualizations and charts over walls of text
 
 ## Code Style
 

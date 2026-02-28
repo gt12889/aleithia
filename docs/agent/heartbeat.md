@@ -37,14 +37,14 @@
 
 ## Track Strategy
 
-| Track | Key Focus |
-|-------|-----------|
-| Best Voyager Hack | Overall innovation and execution |
-| Modal (AI Inference) | Use Modal for serverless AI analysis of regulatory data |
-| Best UI/UX Design | Polished, accessible dashboard for non-technical users |
-| Best Social Impact | Leveling the playing field for small businesses |
-| Supermemory | Persistent context for business-specific regulatory knowledge |
-| Solana | Data provenance and verification of regulatory sources |
+| Track | What Judges Want | Our Angle |
+|-------|-----------------|-----------|
+| Best Voyager Hack | Creativity + complexity + impact + execution | Novel regulatory AI, multi-tech integration, social mission |
+| Modal AI Inference | Ambitious inference on Modal solving real problems | Run regulatory analysis/NLP models on Modal GPUs (code: `VVN-YQS-E55`, $250 credits) |
+| Best UI/UX Design | Intuitive, polished, delightful. First impression to final click | Premium dashboard — effortless, accessible, strong visual hierarchy |
+| Best Social Impact | Tangible positive change for pressing societal issue | Regulatory equity for small businesses vs. big firm advantage |
+| Supermemory | Remember, understand, adapt. Use multiple APIs | Business profiles + regulatory memory + adaptive recommendations |
+| Solana | TBD | Data provenance / verification of regulatory sources |
 
 ## Recent Changes
 

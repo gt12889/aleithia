@@ -90,6 +90,9 @@ npm run lint
 pip install modal
 modal token new
 
+# Redeem $250 credits (IMPORTANT — do this first)
+# Go to modal.com/credits and use code: VVN-YQS-E55
+
 # Deploy
 modal deploy modal/inference.py
 
@@ -100,8 +103,8 @@ modal run modal/inference.py
 ## Key Libraries
 
 - **FastAPI:** Auto-generates OpenAPI docs at `/docs`
-- **Modal:** Serverless AI inference — deploy ML models without managing infra
-- **Supermemory:** Persistent memory layer for context-aware AI interactions
+- **Modal:** Serverless AI inference — flexible GPU compute, code sandboxes, storage. Used by Ramp, Suno, Lovable. Judges want ambitious inference, not just API wrapping
+- **Supermemory:** Context Engineering APIs — Retrieval, Memory, User Profiles, Connectors, Multi-modal Extractors. Free tier available; top up at booth. Judges want apps that remember, understand, adapt
 - **pandas:** Regulatory data ingestion and transforms
 - **polars:** Large dataset performance-critical operations
 - **pydantic:** All API models inherit from `BaseModel`
