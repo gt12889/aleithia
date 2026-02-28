@@ -183,6 +183,7 @@ async def chat(request: Request):
         yield f"data: {json.dumps({'type': 'status', 'content': 'Deploying intelligence agents...'})}\n\n"
 
         try:
+            # Phase 1: Agent gathering (returns synthesis_messages, NOT response text)
             from modal_app.agents import orchestrate_query
             result = await orchestrate_query.remote.aio(
                 user_id=user_id,
@@ -191,20 +192,55 @@ async def chat(request: Request):
                 target_neighborhood=neighborhood,
             )
 
-            # Send agent stats
-            yield f"data: {json.dumps({'type': 'agents', 'agents_deployed': result.get('agents_deployed', 0), 'neighborhoods': result.get('neighborhoods_analyzed', []), 'data_points': result.get('total_data_points', 0)})}\n\n"
+            # Build per-agent summaries for frontend
+            agent_summaries = []
+            agent_results = result.get("context", {}).get("agent_results", {})
+            for key, agent_result in agent_results.items():
+                if isinstance(agent_result, dict) and "error" not in agent_result:
+                    summary = {
+                        "name": key,
+                        "data_points": agent_result.get("data_points", 0),
+                    }
+                    if "findings" in agent_result:
+                        summary["sources"] = list(agent_result["findings"].keys())
+                    if "regulations" in agent_result:
+                        summary["regulation_count"] = len(agent_result["regulations"])
+                    agent_summaries.append(summary)
+                else:
+                    agent_summaries.append({"name": key, "data_points": 0, "error": True})
 
-            # Stream the response
-            response_text = result.get("response", "")
-            # Simulate token streaming from the pre-generated response
-            words = response_text.split(" ")
-            for i in range(0, len(words), 3):
-                chunk = " ".join(words[i:i+3])
-                if i > 0:
-                    chunk = " " + chunk
-                yield f"data: {json.dumps({'type': 'token', 'content': chunk})}\n\n"
+            # Send agent stats with per-agent breakdown
+            yield f"data: {json.dumps({'type': 'agents', 'agents_deployed': result.get('agents_deployed', 0), 'neighborhoods': result.get('neighborhoods_analyzed', []), 'data_points': result.get('total_data_points', 0), 'agent_summaries': agent_summaries})}\n\n"
+
+            # Status bridge between agents and LLM streaming
+            yield f"data: {json.dumps({'type': 'status', 'content': 'Synthesizing intelligence report...'})}\n\n"
+
+            # Phase 2: Real LLM streaming
+            from modal_app.llm import AlethiaLLM
+            llm = AlethiaLLM()
+            messages = result["synthesis_messages"]
+
+            full_response = ""
+            async for token in llm.generate_stream.remote_gen.aio(
+                messages, max_tokens=2048, temperature=0.7
+            ):
+                full_response += token
+                yield f"data: {json.dumps({'type': 'token', 'content': token})}\n\n"
 
             yield f"data: {json.dumps({'type': 'done'})}\n\n"
+
+            # Store conversation in Supermemory (fire-and-forget)
+            api_key = os.environ.get("SUPERMEMORY_API_KEY", "")
+            if api_key:
+                try:
+                    from modal_app.supermemory import SupermemoryClient
+                    sm = SupermemoryClient(api_key)
+                    await sm.store_conversation(user_id, [
+                        {"role": "user", "content": question},
+                        {"role": "assistant", "content": full_response},
+                    ])
+                except Exception:
+                    pass
 
         except Exception as e:
             yield f"data: {json.dumps({'type': 'error', 'content': str(e)})}\n\n"
