@@ -4,6 +4,7 @@ Provides persistent memory layer for the Alethia intelligence engine.
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 from datetime import datetime, timezone
@@ -29,14 +30,14 @@ class SupermemoryClient:
 
     async def add_memory(self, content: str, metadata: dict | None = None, container_tag: str = "chicago_data") -> dict:
         """Push a document to Supermemory with metadata and container tag."""
-        async with httpx.AsyncClient(timeout=30) as client:
+        async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
             resp = await client.post(
-                f"{SUPERMEMORY_BASE}/memories",
+                f"{SUPERMEMORY_BASE}/documents",
                 headers=self.headers,
                 json={
                     "content": content[:10000],
                     "metadata": metadata or {},
-                    "containerTags": [container_tag],
+                    "containerTag": container_tag,
                 },
             )
             resp.raise_for_status()
@@ -48,9 +49,9 @@ class SupermemoryClient:
         if container_tags:
             payload["containerTags"] = container_tags
 
-        async with httpx.AsyncClient(timeout=30) as client:
+        async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
             resp = await client.post(
-                f"{SUPERMEMORY_BASE}/memories/search",
+                f"{SUPERMEMORY_BASE}/search",
                 headers=self.headers,
                 json=payload,
             )
@@ -121,18 +122,19 @@ async def push_pipeline_data_to_supermemory():
                 metadata = {
                     "source": doc.get("source", ""),
                     "neighborhood": doc.get("geo", {}).get("neighborhood", ""),
-                    "classification": doc.get("classification", {}),
-                    "sentiment": doc.get("sentiment", {}),
                     "timestamp": doc.get("timestamp", ""),
                     "doc_id": doc.get("id", ""),
                 }
                 await client.add_memory(content, metadata, container_tag="chicago_data")
                 synced += 1
+                await asyncio.sleep(0.5)  # Rate limit: 2 req/s
             except Exception as e:
                 print(f"Supermemory sync error for {json_file.name}: {e}")
+                if "429" in str(e):
+                    await asyncio.sleep(5)
 
     # Sync raw data from each pipeline source
-    for source in ["news", "politics", "public_data", "demographics"]:
+    for source in ["news", "politics", "public_data", "demographics", "reddit", "reviews", "realestate", "federal_register", "traffic"]:
         raw_dir = Path(RAW_DATA_PATH) / source
         if not raw_dir.exists():
             continue
@@ -150,8 +152,11 @@ async def push_pipeline_data_to_supermemory():
                 }
                 await client.add_memory(content, metadata, container_tag=f"chicago_{source}")
                 synced += 1
+                await asyncio.sleep(0.5)  # Rate limit: 2 req/s
             except Exception as e:
                 print(f"Supermemory raw sync error for {json_file.name}: {e}")
+                if "429" in str(e):
+                    await asyncio.sleep(5)
 
     print(f"Supermemory sync complete: {synced} documents pushed")
     return synced

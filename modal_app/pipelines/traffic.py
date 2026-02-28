@@ -211,7 +211,6 @@ def _convert_to_documents(traffic_data: list[dict]) -> list[Document]:
     image=base_image,
     volumes={"/data": volume},
     secrets=[modal.Secret.from_name("alethia-secrets")],
-    schedule=modal.Period(hours=1),
     timeout=120,
 )
 async def traffic_ingester():

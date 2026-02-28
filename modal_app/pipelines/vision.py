@@ -93,6 +93,9 @@ def label_frame(frame_path: str, classes: list[str] | None = None) -> dict:
     import openai
     from PIL import Image
 
+    from modal_app.instrumentation import init_tracing
+    init_tracing()
+
     if classes is None:
         classes = VISION_CLASSES
 

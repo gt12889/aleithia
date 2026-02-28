@@ -152,7 +152,7 @@ async def neighborhood_intel_agent(neighborhood: str, business_type: str, focus_
                 sm = SupermemoryClient(api_key)
                 results = await sm.search(
                     query=f"{business_type} in {neighborhood} Chicago permits zoning competition",
-                    container_tags=["chicago_data", f"chicago_news", f"chicago_public_data"],
+                    container_tags=["chicago_data", "chicago_news", "chicago_public_data", "chicago_reddit", "chicago_reviews", "chicago_politics"],
                     limit=10,
                 )
                 report["findings"]["supermemory"] = {
