@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react'
 import { SignedIn, SignedOut, SignInButton, SignUpButton, useClerk, useUser } from '@clerk/clerk-react'
 import type { UserProfile, NeighborhoodData, DataSources, ChatMessage, RiskScore } from '../types/index.ts'
 import { api, streamChat } from '../api.ts'
+import type { ProcessStage } from './ProcessFlow.tsx'
 import RiskCard from './RiskCard.tsx'
 import ChatPanel from './ChatPanel.tsx'
 import MapView from './MapView.tsx'
@@ -132,6 +133,8 @@ export default function Dashboard({ profile, onReset }: Props) {
   const [agentInfo, setAgentInfo] = useState<AgentInfo | null>(null)
   const [agentActive, setAgentActive] = useState(false)
   const [agentElapsedMs, setAgentElapsedMs] = useState<number | undefined>(undefined)
+  const [processStage, setProcessStage] = useState<ProcessStage>('idle')
+  const [chatQuestion, setChatQuestion] = useState('')
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [activeTab, setActiveTab] = useState<Tab>('overview')
@@ -174,6 +177,8 @@ export default function Dashboard({ profile, onReset }: Props) {
     setAgentActive(true)
     setAgentInfo(null)
     setStatusMessage('')
+    setProcessStage('deploying')
+    setChatQuestion(message)
     const startTime = Date.now()
 
     // Add empty assistant message for streaming
@@ -184,14 +189,19 @@ export default function Dashboard({ profile, onReset }: Props) {
       await streamChat(message, profile, {
         onStatus: (content) => {
           setStatusMessage(content)
+          if (content.toLowerCase().includes('synth')) {
+            setProcessStage('synthesizing')
+          }
         },
         onAgents: (data) => {
           setAgentInfo(data)
           setAgentActive(false)
           setAgentElapsedMs(Date.now() - startTime)
+          setProcessStage('agents_complete')
         },
         onToken: (token) => {
           setStatusMessage('')
+          setProcessStage('streaming')
           setMessages(prev => {
             const updated = [...prev]
             const last = updated[updated.length - 1]
@@ -204,6 +214,7 @@ export default function Dashboard({ profile, onReset }: Props) {
         onDone: () => {
           setIsStreaming(false)
           setChatLoading(false)
+          setProcessStage('complete')
 
           if (user) {
             api.saveUserSettings(user.id, profile.business_type, profile.neighborhood).catch(() => {})
@@ -220,6 +231,7 @@ export default function Dashboard({ profile, onReset }: Props) {
           setIsStreaming(false)
           setAgentActive(false)
           setStatusMessage('')
+          setProcessStage('complete')
 
           const nb = profile.neighborhood
           const biz = profile.business_type.toLowerCase()
@@ -275,6 +287,7 @@ export default function Dashboard({ profile, onReset }: Props) {
       setIsStreaming(false)
       setChatLoading(false)
       setAgentActive(false)
+      setProcessStage('complete')
     }
   }
 
@@ -470,6 +483,8 @@ export default function Dashboard({ profile, onReset }: Props) {
             agentActive={agentActive}
             agentElapsedMs={agentElapsedMs}
             statusMessage={statusMessage}
+            processStage={processStage}
+            chatQuestion={chatQuestion}
           />
         </div>
       </div>
