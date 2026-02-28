@@ -1,104 +1,295 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, useCallback } from 'react'
+import mapboxgl from 'mapbox-gl'
+import 'mapbox-gl/dist/mapbox-gl.css'
 
 type HeatmapLayer = 'regulatory' | 'business' | 'sentiment'
 
-const LAYER_CONFIG: Record<HeatmapLayer, { label: string; color: string }> = {
-  regulatory: { label: 'Regulatory', color: '#ef4444' },
-  business: { label: 'Business', color: '#3b82f6' },
-  sentiment: { label: 'Sentiment', color: '#22c55e' },
+const LAYER_CONFIG: Record<HeatmapLayer, {
+  label: string
+  color: string
+  property: string
+  stops: [number, string][]
+}> = {
+  regulatory: {
+    label: 'Regulatory Density',
+    color: '#ef4444',
+    property: 'active_permits',
+    stops: [
+      [0, 'rgba(239,68,68,0)'],
+      [5, 'rgba(239,68,68,0.3)'],
+      [20, 'rgba(239,68,68,0.6)'],
+      [50, 'rgba(239,68,68,0.9)'],
+    ],
+  },
+  business: {
+    label: 'Business Activity',
+    color: '#3b82f6',
+    property: 'business_activity',
+    stops: [
+      [0, 'rgba(59,130,246,0)'],
+      [10, 'rgba(59,130,246,0.3)'],
+      [50, 'rgba(59,130,246,0.6)'],
+      [100, 'rgba(59,130,246,0.9)'],
+    ],
+  },
+  sentiment: {
+    label: 'Sentiment',
+    color: '#22c55e',
+    property: 'avg_review_rating',
+    stops: [
+      [0, 'rgba(239,68,68,0.6)'],
+      [2.5, 'rgba(234,179,8,0.5)'],
+      [4, 'rgba(34,197,94,0.4)'],
+      [5, 'rgba(34,197,94,0.8)'],
+    ],
+  },
 }
+
+// Chicago center coordinates
+const CHICAGO_CENTER: [number, number] = [-87.6298, 41.8781]
+const DEFAULT_ZOOM = 11
 
 interface Props {
   activeNeighborhood?: string
+  geojsonUrl?: string
 }
 
-export default function MapView({ activeNeighborhood }: Props) {
+export default function MapView({ activeNeighborhood, geojsonUrl }: Props) {
   const mapContainerRef = useRef<HTMLDivElement>(null)
+  const mapRef = useRef<mapboxgl.Map | null>(null)
+  const popupRef = useRef<mapboxgl.Popup | null>(null)
   const [activeLayer, setActiveLayer] = useState<HeatmapLayer>('regulatory')
-  const [mapLoaded, setMapLoaded] = useState(false)
+  const [mapReady, setMapReady] = useState(false)
+  const [mapError, setMapError] = useState<string | null>(null)
+
+  // Initialize the map
+  useEffect(() => {
+    if (!mapContainerRef.current) return
+
+    const token = import.meta.env.VITE_MAPBOX_TOKEN
+    if (!token) {
+      setMapError('Set VITE_MAPBOX_TOKEN in your .env file')
+      return
+    }
+
+    mapboxgl.accessToken = token
+
+    const map = new mapboxgl.Map({
+      container: mapContainerRef.current,
+      style: 'mapbox://styles/mapbox/dark-v11',
+      center: CHICAGO_CENTER,
+      zoom: DEFAULT_ZOOM,
+      pitch: 0,
+      attributionControl: false,
+    })
+
+    map.addControl(new mapboxgl.NavigationControl({ showCompass: false }), 'top-right')
+    map.addControl(new mapboxgl.AttributionControl({ compact: true }), 'bottom-right')
+
+    map.on('load', () => {
+      // Load GeoJSON source — from API or fallback inline
+      const sourceUrl = geojsonUrl || '/api/geo/neighborhood_metrics'
+
+      // Try fetching the GeoJSON; if it fails, use an empty collection
+      fetch(sourceUrl)
+        .then((res) => (res.ok ? res.json() : Promise.reject(res.statusText)))
+        .then((geojson) => {
+          addSourceAndLayers(map, geojson)
+        })
+        .catch(() => {
+          // Fallback: empty feature collection so layers still exist
+          addSourceAndLayers(map, { type: 'FeatureCollection', features: [] })
+        })
+
+      setMapReady(true)
+    })
+
+    map.on('error', (e) => {
+      console.error('Mapbox error:', e)
+      setMapError('Map failed to load — check your token')
+    })
+
+    mapRef.current = map
+
+    return () => {
+      map.remove()
+      mapRef.current = null
+    }
+  }, [geojsonUrl])
+
+  // Add the GeoJSON source + all three heatmap/circle layers
+  function addSourceAndLayers(map: mapboxgl.Map, geojson: GeoJSON.FeatureCollection) {
+    map.addSource('neighborhoods', {
+      type: 'geojson',
+      data: geojson,
+    })
+
+    // Create a layer for each metric
+    for (const [key, config] of Object.entries(LAYER_CONFIG)) {
+      const layerId = `heatmap-${key}`
+
+      // Heatmap layer
+      map.addLayer({
+        id: layerId,
+        type: 'heatmap',
+        source: 'neighborhoods',
+        paint: {
+          'heatmap-weight': [
+            'interpolate', ['linear'],
+            ['get', config.property],
+            0, 0,
+            config.stops[config.stops.length - 1][0] as number, 1,
+          ],
+          'heatmap-intensity': 1.2,
+          'heatmap-radius': 40,
+          'heatmap-opacity': key === 'regulatory' ? 0.8 : 0,
+          'heatmap-color': [
+            'interpolate', ['linear'], ['heatmap-density'],
+            0, 'rgba(0,0,0,0)',
+            0.2, config.stops[1][1],
+            0.5, config.stops[2][1],
+            1, config.stops[3][1],
+          ],
+        },
+      })
+
+      // Circle layer for individual points (visible at higher zoom)
+      map.addLayer({
+        id: `points-${key}`,
+        type: 'circle',
+        source: 'neighborhoods',
+        minzoom: 12,
+        paint: {
+          'circle-radius': [
+            'interpolate', ['linear'],
+            ['get', config.property],
+            0, 4,
+            (config.stops[config.stops.length - 1][0] as number), 14,
+          ],
+          'circle-color': config.color,
+          'circle-opacity': key === 'regulatory' ? 0.7 : 0,
+          'circle-stroke-color': '#fff',
+          'circle-stroke-width': 1,
+          'circle-stroke-opacity': key === 'regulatory' ? 0.4 : 0,
+        },
+      })
+    }
+
+    // Popup on hover
+    map.on('mouseenter', 'points-regulatory', () => { map.getCanvas().style.cursor = 'pointer' })
+    map.on('mouseleave', 'points-regulatory', () => { map.getCanvas().style.cursor = '' })
+
+    for (const key of Object.keys(LAYER_CONFIG)) {
+      map.on('click', `points-${key}`, (e) => {
+        if (!e.features?.[0]) return
+        const props = e.features[0].properties || {}
+        const coords = (e.features[0].geometry as GeoJSON.Point).coordinates.slice() as [number, number]
+
+        popupRef.current?.remove()
+        popupRef.current = new mapboxgl.Popup({ closeButton: false, className: 'alethia-popup' })
+          .setLngLat(coords)
+          .setHTML(`
+            <div style="font-family:system-ui;font-size:13px;color:#e2e8f0;line-height:1.5">
+              <strong style="color:#818cf8">${props.neighborhood || 'Unknown'}</strong><br/>
+              Permits: ${props.active_permits ?? '—'}<br/>
+              Reviews: ${props.review_count ?? '—'}<br/>
+              Activity: ${props.business_activity ?? '—'}
+            </div>
+          `)
+          .addTo(map)
+      })
+    }
+  }
+
+  // Switch visible layer when activeLayer changes
+  const switchLayer = useCallback((layer: HeatmapLayer) => {
+    const map = mapRef.current
+    if (!map || !mapReady) return
+
+    for (const key of Object.keys(LAYER_CONFIG) as HeatmapLayer[]) {
+      const visible = key === layer
+      const hId = `heatmap-${key}`
+      const pId = `points-${key}`
+
+      if (map.getLayer(hId)) {
+        map.setPaintProperty(hId, 'heatmap-opacity', visible ? 0.8 : 0)
+      }
+      if (map.getLayer(pId)) {
+        map.setPaintProperty(pId, 'circle-opacity', visible ? 0.7 : 0)
+        map.setPaintProperty(pId, 'circle-stroke-opacity', visible ? 0.4 : 0)
+      }
+    }
+  }, [mapReady])
 
   useEffect(() => {
-    setMapLoaded(true)
-  }, [])
+    switchLayer(activeLayer)
+  }, [activeLayer, switchLayer])
+
+  // Fly to active neighborhood when it changes
+  useEffect(() => {
+    const map = mapRef.current
+    if (!map || !mapReady || !activeNeighborhood) return
+
+    // Query the source to find the matching feature
+    const features = map.querySourceFeatures('neighborhoods', {
+      filter: ['==', ['get', 'neighborhood'], activeNeighborhood],
+    })
+
+    if (features.length > 0) {
+      const coords = (features[0].geometry as GeoJSON.Point).coordinates as [number, number]
+      map.flyTo({ center: coords, zoom: 13, duration: 1200 })
+    }
+  }, [activeNeighborhood, mapReady])
 
   return (
-    <div className="border border-white/[0.06] bg-white/[0.01] overflow-hidden h-full flex flex-col">
-      <div className="flex gap-0 p-0 border-b border-white/[0.06]">
+    <div className="bg-gray-900 rounded-xl border border-gray-800 overflow-hidden h-full flex flex-col">
+      {/* Layer toggle */}
+      <div className="flex gap-1 p-2 border-b border-gray-800">
         {(Object.keys(LAYER_CONFIG) as HeatmapLayer[]).map((layer) => (
           <button
             key={layer}
             onClick={() => setActiveLayer(layer)}
-            className={`px-4 py-2 text-[10px] font-mono uppercase tracking-wider transition-colors cursor-pointer border-b-2 -mb-px ${
+            className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
               activeLayer === layer
-                ? 'border-white text-white/70'
-                : 'border-transparent text-white/20 hover:text-white/40'
+                ? 'bg-indigo-600 text-white'
+                : 'bg-gray-800 text-gray-400 hover:text-gray-200'
             }`}
           >
+            <span
+              className="inline-block w-2 h-2 rounded-full mr-1.5"
+              style={{ backgroundColor: LAYER_CONFIG[layer].color }}
+            />
             {LAYER_CONFIG[layer].label}
           </button>
         ))}
       </div>
 
+      {/* Map container */}
       <div ref={mapContainerRef} className="flex-1 relative min-h-[300px]">
-        <div className="absolute inset-0 flex items-center justify-center">
-          <div className="relative w-full h-full overflow-hidden">
-            <div className="absolute inset-0 opacity-[0.04]"
-              style={{
-                backgroundImage: 'linear-gradient(rgba(255,255,255,0.4) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.4) 1px, transparent 1px)',
-                backgroundSize: '40px 40px',
-              }}
-            />
-
-            {[
-              { name: 'Lincoln Park', x: 52, y: 30 },
-              { name: 'Wicker Park', x: 42, y: 35 },
-              { name: 'Logan Square', x: 38, y: 28 },
-              { name: 'West Loop', x: 48, y: 45 },
-              { name: 'Loop', x: 53, y: 48 },
-              { name: 'Pilsen', x: 47, y: 58 },
-              { name: 'Hyde Park', x: 60, y: 70 },
-              { name: 'River North', x: 50, y: 40 },
-              { name: 'Chinatown', x: 52, y: 60 },
-              { name: 'Uptown', x: 55, y: 20 },
-              { name: 'Rogers Park', x: 56, y: 10 },
-              { name: 'Bridgeport', x: 48, y: 62 },
-              { name: 'Lakeview', x: 54, y: 25 },
-              { name: 'South Loop', x: 54, y: 55 },
-              { name: 'Bronzeville', x: 56, y: 58 },
-            ].map((dot) => (
-              <div
-                key={dot.name}
-                className="absolute transform -translate-x-1/2 -translate-y-1/2 group"
-                style={{ left: `${dot.x}%`, top: `${dot.y}%` }}
-              >
-                <div
-                  className={`rounded-full transition-all ${
-                    activeNeighborhood === dot.name
-                      ? 'w-4 h-4 ring-1 ring-white/60'
-                      : 'w-2 h-2'
-                  }`}
-                  style={{
-                    backgroundColor: LAYER_CONFIG[activeLayer].color,
-                    opacity: activeNeighborhood === dot.name ? 1 : 0.3 + Math.random() * 0.4,
-                    boxShadow: `0 0 ${6 + Math.random() * 8}px ${LAYER_CONFIG[activeLayer].color}40`,
-                  }}
-                />
-                <div className="absolute left-1/2 -translate-x-1/2 -top-6 bg-white/[0.06] backdrop-blur-sm text-[10px] font-mono text-white/50 px-2 py-0.5 whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none border border-white/[0.06]">
-                  {dot.name}
-                </div>
-              </div>
-            ))}
-
-            <div className="absolute bottom-3 left-3 text-[10px] font-mono text-white/15 uppercase tracking-wider">
-              Chicago — {LAYER_CONFIG[activeLayer].label}
+        {mapError && (
+          <div className="absolute inset-0 bg-gray-900 flex items-center justify-center z-10">
+            <div className="text-center space-y-2">
+              <div className="text-red-400 text-sm">{mapError}</div>
+              <code className="text-xs text-gray-500 block">
+                echo "VITE_MAPBOX_TOKEN=pk.your_token" &gt; .env
+              </code>
             </div>
-
-            {mapLoaded && !mapContainerRef.current?.querySelector('canvas') && (
-              <div className="absolute top-3 right-3 text-[10px] font-mono text-white/10 border border-white/[0.04] px-2 py-1">
-                MAPBOX_TOKEN required for full map
-              </div>
-            )}
           </div>
+        )}
+      </div>
+
+      {/* Legend */}
+      <div className="flex items-center justify-between px-3 py-2 border-t border-gray-800 text-[11px] text-gray-500">
+        <span>Chicago, IL — {LAYER_CONFIG[activeLayer].label}</span>
+        <div className="flex items-center gap-1.5">
+          <span>Low</span>
+          <div
+            className="w-16 h-1.5 rounded-full"
+            style={{
+              background: `linear-gradient(to right, transparent, ${LAYER_CONFIG[activeLayer].color})`,
+            }}
+          />
+          <span>High</span>
         </div>
       </div>
     </div>

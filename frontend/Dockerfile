@@ -4,6 +4,7 @@ WORKDIR /app
 
 COPY package.json ./
 RUN npm install
+RUN npm install @clerk/clerk-react @react-three/fiber @react-three/drei
 
 COPY . .
 
