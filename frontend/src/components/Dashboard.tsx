@@ -86,6 +86,17 @@ function computeRiskScore(data: NeighborhoodData, profile: UserProfile): RiskSco
     })
   }
 
+  if (data.cctv && data.cctv.cameras.length > 0) {
+    const density = data.cctv.density
+    factors.push({
+      label: `${data.cctv.cameras.length} CCTV cameras — ${density} foot traffic`,
+      pct: density === 'high' ? 5 : density === 'medium' ? 10 : 15,
+      source: 'cctv',
+      severity: density === 'low' ? 'medium' as const : 'low' as const,
+      description: `Live CCTV analysis shows ~${data.cctv.avg_pedestrians} avg pedestrians and ~${data.cctv.avg_vehicles} avg vehicles across ${data.cctv.cameras.length} nearby cameras.`,
+    })
+  }
+
   const metrics = data.metrics || {}
   if (metrics.active_permits) {
     factors.push({
@@ -409,12 +420,12 @@ export default function Dashboard({ profile, onReset }: Props) {
                   <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
                     {riskScore && <RiskCard score={riskScore} />}
                     {neighborhoodData?.metrics && (
-                      <DemographicsCard metrics={neighborhoodData.metrics} demographics={neighborhoodData.demographics} />
+                      <DemographicsCard metrics={neighborhoodData.metrics} demographics={neighborhoodData.demographics} cctv={neighborhoodData.cctv} />
                     )}
                   </div>
 
                   {neighborhoodData && (
-                    <div className="grid grid-cols-4 gap-3">
+                    <div className="grid grid-cols-5 gap-3">
                       <StatCard
                         label="Food Inspections"
                         value={neighborhoodData.inspection_stats.total}
@@ -437,6 +448,12 @@ export default function Dashboard({ profile, onReset }: Props) {
                         label="Intel Items"
                         value={neighborhoodData.news.length + neighborhoodData.politics.length}
                         sub="recent"
+                        severity="nominal"
+                      />
+                      <StatCard
+                        label="CCTV Cameras"
+                        value={neighborhoodData.cctv?.cameras.length ?? 0}
+                        sub={neighborhoodData.cctv?.density ?? 'no data'}
                         severity="nominal"
                       />
                     </div>
