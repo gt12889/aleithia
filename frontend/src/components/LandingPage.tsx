@@ -2,6 +2,7 @@ import { Suspense } from 'react'
 import Spline from '@splinetool/react-spline'
 import type { Application } from '@splinetool/runtime'
 import CityGlobe from './CityGlobe'
+import LogoLoop from './LogoLoop'
 
 interface Props {
   onGetStarted: () => void
@@ -26,16 +27,14 @@ function tuneScene(app: Application) {
   })
 }
 
-const SOURCES = [
-  { icon: '💬', name: 'Reddit' },
-  { icon: '⭐', name: 'Yelp' },
-  { icon: '📍', name: 'Google Places' },
-  { icon: '🏛️', name: 'Legistar' },
-  { icon: '📊', name: 'Chicago Data Portal' },
-  { icon: '📰', name: 'NewsAPI' },
-  { icon: '🚇', name: 'CTA Transit' },
-  { icon: '📋', name: 'Census Bureau' },
-  { icon: '🏗️', name: 'Building Permits' },
+const SPONSORS = [
+  { name: 'Modal' },
+  { name: 'SuperMemory' },
+  { name: 'Arize AI' },
+  { name: 'OpenAI' },
+  { name: 'GPT-4o' },
+  { name: 'Claude' },
+  { name: 'Cursor Agent' },
 ]
 
 const STATS = [
@@ -132,23 +131,26 @@ export default function LandingPage({ onGetStarted }: Props) {
         </div>
       </section>
 
-      {/* ── Data Sources Ticker ── */}
-      <section className="relative border-t border-white/[0.04] py-10 overflow-hidden">
+      {/* ── Sponsors Ticker ── */}
+      <section className="relative border-t border-white/[0.04] py-10">
         <p className="text-center text-[10px] font-mono uppercase tracking-[0.3em] text-white/20 mb-6">
-          Powered by 9 live data sources
+          Sponsored by
         </p>
-        <div className="relative">
-          <div className="absolute left-0 top-0 bottom-0 w-24 bg-gradient-to-r from-[#06080d] to-transparent z-10" />
-          <div className="absolute right-0 top-0 bottom-0 w-24 bg-gradient-to-l from-[#06080d] to-transparent z-10" />
-          <div className="flex animate-scroll-x gap-12 w-max">
-            {[...SOURCES, ...SOURCES].map((s, i) => (
-              <div key={i} className="flex items-center gap-2.5 shrink-0 opacity-40 hover:opacity-70 transition-opacity">
-                <span className="text-lg">{s.icon}</span>
-                <span className="text-xs font-mono text-white/60 whitespace-nowrap">{s.name}</span>
-              </div>
-            ))}
-          </div>
-        </div>
+        <LogoLoop
+          logos={SPONSORS.map((s) => ({
+            node: (
+              <span className="text-sm font-semibold tracking-wide text-white/40 hover:text-white/70 transition-colors uppercase">
+                {s.name}
+              </span>
+            ),
+          }))}
+          speed={40}
+          gap={64}
+          logoHeight={24}
+          pauseOnHover
+          fadeOut
+          fadeOutColor="#06080d"
+        />
       </section>
 
       {/* ── Live Stats ── */}
