@@ -87,13 +87,15 @@ export default function MapView({ activeNeighborhood, geojsonUrl }: Props) {
     map.addControl(new mapboxgl.AttributionControl({ compact: true }), 'bottom-right')
 
     map.on('load', () => {
-      // Load GeoJSON source — from API or fallback inline
-      const sourceUrl = geojsonUrl || '/api/geo/neighborhood_metrics'
+      // Always fetch GeoJSON from modal volume
+      const sourceUrl = 'https://ibsrinivas27--alethia-serve.modal.run/neighborhood_metric'
+      console.log('Fetching GeoJSON from:', sourceUrl) // Debug: check URL being fetched
 
       // Try fetching the GeoJSON; if it fails, use an empty collection
       fetch(sourceUrl)
         .then((res) => (res.ok ? res.json() : Promise.reject(res.statusText)))
         .then((geojson) => {
+          console.log('Loaded GeoJSON:', geojson) // Debug: print API response
           addSourceAndLayers(map, geojson)
         })
         .catch(() => {
@@ -124,7 +126,9 @@ export default function MapView({ activeNeighborhood, geojsonUrl }: Props) {
       data: geojson,
     })
 
-    // Create a layer for each metric
+    // Find the first symbol layer in the style to insert layers before it
+    const firstSymbolLayer = map.getStyle().layers?.find(l => l.type === 'symbol')?.id
+
     for (const [key, config] of Object.entries(LAYER_CONFIG)) {
       const layerId = `heatmap-${key}`
 
@@ -151,7 +155,7 @@ export default function MapView({ activeNeighborhood, geojsonUrl }: Props) {
             1, config.stops[3][1],
           ],
         },
-      })
+      }, firstSymbolLayer)
 
       // Circle layer for individual points (visible at higher zoom)
       map.addLayer({
@@ -172,7 +176,7 @@ export default function MapView({ activeNeighborhood, geojsonUrl }: Props) {
           'circle-stroke-width': 1,
           'circle-stroke-opacity': key === 'regulatory' ? 0.4 : 0,
         },
-      })
+      }, firstSymbolLayer)
     }
 
     // Popup on hover

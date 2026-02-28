@@ -1,7 +1,7 @@
 """Data compression — compresses raw Socrata/demographics/review JSON into
 neighborhood-level summaries (~32:1 ratio).
 
-Produces GeoJSON at /data/processed/geo/neighborhood_metrics.json for frontend Mapbox GL.
+Produces GeoJSON at alethia-data/processed/geo/neighborhood_metrics.json for frontend Mapbox GL.
 """
 import json
 from collections import defaultdict
