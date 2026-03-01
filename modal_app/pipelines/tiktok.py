@@ -54,6 +54,9 @@ CHICAGO_SEARCH_QUERIES = [
 MAX_VIDEOS_PER_QUERY = int(os.environ.get("MAX_VIDEOS_PER_QUERY", "5"))
 PROFILE_CITY_QUERY_LIMIT = 5
 PROFILE_LOCAL_QUERY_LIMIT = 2
+KERNEL_CREATE_MAX_ATTEMPTS = int(os.environ.get("TIKTOK_KERNEL_CREATE_MAX_ATTEMPTS", "3"))
+CDP_CONNECT_MAX_ATTEMPTS = int(os.environ.get("TIKTOK_CDP_CONNECT_MAX_ATTEMPTS", "3"))
+TIKTOK_QUERY_CONCURRENCY = max(1, int(os.environ.get("TIKTOK_QUERY_CONCURRENCY", "1")))
 
 
 def sanitize_query_term(value: str) -> str:
@@ -207,6 +210,31 @@ async def _wait_for_video_links(page, timeout_ms: int = 12_000) -> bool:
     return False
 
 
+def _is_retryable_kernel_create_error(exc: Exception) -> bool:
+    text = str(exc).lower()
+    markers = (
+        "org_limit_exceeded",
+        "rate_limit_exceeded",
+        "timeout",
+        "temporar",
+        "429",
+    )
+    return any(m in text for m in markers)
+
+
+def _is_retryable_cdp_connect_error(exc: Exception) -> bool:
+    text = str(exc).lower()
+    markers = (
+        "econnrefused",
+        "etimedout",
+        "timed out",
+        "websocket error",
+        "code=1006",
+        "connection reset",
+    )
+    return any(m in text for m in markers)
+
+
 async def _scrape_async(search_query: str, max_videos: int) -> list[dict]:
     """Scrape TikTok search results using Kernel cloud browser + Playwright."""
     from kernel import Kernel
@@ -218,19 +246,58 @@ async def _scrape_async(search_query: str, max_videos: int) -> list[dict]:
         return []
 
     k = Kernel(api_key=kernel_api_key)
+    kernel_browser = None
+    browser = None
     try:
-        kernel_browser = k.browsers.create()
-    except Exception as exc:
-        logger.error("Failed to create Kernel browser session: %s", exc)
-        return []
+        for attempt in range(1, KERNEL_CREATE_MAX_ATTEMPTS + 1):
+            try:
+                kernel_browser = k.browsers.create()
+                break
+            except Exception as exc:
+                if attempt >= KERNEL_CREATE_MAX_ATTEMPTS or not _is_retryable_kernel_create_error(exc):
+                    logger.error("Failed to create Kernel browser session: %s", exc)
+                    return []
+                delay_s = min(2.0 * attempt, 6.0)
+                logger.warning(
+                    "Kernel browser session create failed (attempt %d/%d): %s; retrying in %.1fs",
+                    attempt,
+                    KERNEL_CREATE_MAX_ATTEMPTS,
+                    exc,
+                    delay_s,
+                )
+                await asyncio.sleep(delay_s)
 
-    async with async_playwright() as pw:
-        browser = await pw.chromium.connect_over_cdp(kernel_browser.cdp_ws_url)
-        context = browser.contexts[0] if browser.contexts else await browser.new_context()
-        await _apply_tiktok_cookie_header(context)
-        page = context.pages[0] if context.pages else await context.new_page()
+        if not kernel_browser:
+            logger.error("Failed to create Kernel browser session: unknown error")
+            return []
 
-        try:
+        async with async_playwright() as pw:
+            for attempt in range(1, CDP_CONNECT_MAX_ATTEMPTS + 1):
+                try:
+                    browser = await pw.chromium.connect_over_cdp(kernel_browser.cdp_ws_url)
+                    break
+                except Exception as exc:
+                    if attempt >= CDP_CONNECT_MAX_ATTEMPTS or not _is_retryable_cdp_connect_error(exc):
+                        raise
+                    delay_s = min(1.5 * attempt, 5.0)
+                    logger.warning(
+                        "CDP connect failed for query '%s' (attempt %d/%d): %s; retrying in %.1fs",
+                        search_query,
+                        attempt,
+                        CDP_CONNECT_MAX_ATTEMPTS,
+                        exc,
+                        delay_s,
+                    )
+                    await asyncio.sleep(delay_s)
+
+            if browser is None:
+                logger.error("Scrape failed for query '%s': browser unavailable after retries", search_query)
+                return []
+
+            context = browser.contexts[0] if browser.contexts else await browser.new_context()
+            await _apply_tiktok_cookie_header(context)
+            page = context.pages[0] if context.pages else await context.new_page()
+
             encoded_query = quote_plus(search_query)
             candidate_urls = [
                 f"https://www.tiktok.com/search/video?q={encoded_query}",
@@ -336,11 +403,16 @@ async def _scrape_async(search_query: str, max_videos: int) -> list[dict]:
 
             return videos
 
-        except Exception as exc:
-            logger.error("Scrape failed for query '%s': %s", search_query, exc)
-            return []
-        finally:
-            await browser.close()
+    except Exception as exc:
+        logger.error("Scrape failed for query '%s': %s", search_query, exc)
+        return []
+    finally:
+        if browser is not None:
+            try:
+                await browser.close()
+            except Exception:
+                pass
+        if kernel_browser is not None:
             try:
                 k.browsers.delete_by_id(kernel_browser.session_id)
             except Exception:
@@ -589,16 +661,20 @@ def ingest_tiktok(
     all_videos: list[dict] = []
     seen_urls: set[str] = set()
 
-    for spec, result in zip(specs, scrape_tiktok.starmap(scrape_args)):
-        for v in (result or []):
-            url = v.get("video_url", "")
-            if url and url not in seen_urls:
-                seen_urls.add(url)
-                v["search_query"] = spec["query"]
-                v["query_scope"] = spec.get("scope", "city")
-                v["query_business_type"] = spec.get("business_type", "")
-                v["query_neighborhood"] = spec.get("neighborhood", "")
-                all_videos.append(v)
+    for start in range(0, len(scrape_args), TIKTOK_QUERY_CONCURRENCY):
+        end = start + TIKTOK_QUERY_CONCURRENCY
+        batch_specs = specs[start:end]
+        batch_args = scrape_args[start:end]
+        for spec, result in zip(batch_specs, scrape_tiktok.starmap(batch_args)):
+            for v in (result or []):
+                url = v.get("video_url", "")
+                if url and url not in seen_urls:
+                    seen_urls.add(url)
+                    v["search_query"] = spec["query"]
+                    v["query_scope"] = spec.get("scope", "city")
+                    v["query_business_type"] = spec.get("business_type", "")
+                    v["query_neighborhood"] = spec.get("neighborhood", "")
+                    all_videos.append(v)
 
     logger.info("Scraped %d unique videos from %d queries", len(all_videos), len(specs))
 

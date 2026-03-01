@@ -6,6 +6,7 @@ Modal features: @modal.asgi_app, streaming SSE
 """
 import asyncio
 import base64
+import asyncio
 import json
 import os
 import re
@@ -43,10 +44,14 @@ web_app.add_middleware(
 
 # Profile refresh throttling for background TikTok fetches.
 tiktok_refresh_dict = modal.Dict.from_name("alethia-tiktok-refresh", create_if_missing=True)
+tiktok_refresh_inflight_dict = modal.Dict.from_name("alethia-tiktok-refresh-inflight", create_if_missing=True)
 TIKTOK_REFRESH_COOLDOWN_SECONDS = 30 * 60
 TIKTOK_PROFILE_STALE_SECONDS = 6 * 60 * 60
 TIKTOK_TARGET_COUNT = 5
 TIKTOK_LOCAL_RESERVE = 2
+TIKTOK_REFRESH_INFLIGHT_SECONDS = 10 * 60
+_tiktok_refresh_locks: dict[str, asyncio.Lock] = {}
+_tiktok_refresh_locks_guard = asyncio.Lock()
 
 
 def _load_docs(source: str, limit: int = 200) -> list[dict]:
@@ -356,6 +361,30 @@ def _refresh_key(business_type: str, neighborhood: str) -> str:
     biz = _sanitize_business_type(business_type) or "small business"
     nb = (neighborhood or "").strip().lower()
     return f"{biz}|{nb}"
+
+
+async def _get_tiktok_refresh_lock(key: str) -> asyncio.Lock:
+    """Return a per-profile in-process lock to avoid duplicate refresh spawns."""
+    async with _tiktok_refresh_locks_guard:
+        lock = _tiktok_refresh_locks.get(key)
+        if lock is None:
+            lock = asyncio.Lock()
+            _tiktok_refresh_locks[key] = lock
+        return lock
+
+
+async def _dict_get_float_aio(d: modal.Dict, key: str, default: float = 0.0) -> float:
+    """Async-safe float lookup for modal.Dict values."""
+    try:
+        value = await d.__getitem__.aio(key)
+    except KeyError:
+        return default
+    except Exception:
+        return default
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
 
 
 def _is_low_quality_tiktok_doc(doc: dict) -> bool:
@@ -1119,32 +1148,39 @@ async def _maybe_spawn_tiktok_profile_refresh(
         return status
 
     key = _refresh_key(business_type, neighborhood)
-    try:
-        last_epoch = float(tiktok_refresh_dict[key])
-    except KeyError:
-        last_epoch = 0.0
-    except Exception:
-        last_epoch = 0.0
+    key_lock = await _get_tiktok_refresh_lock(key)
+    async with key_lock:
+        now_epoch = time.time()
+        last_epoch = await _dict_get_float_aio(tiktok_refresh_dict, key, default=0.0)
+        elapsed = now_epoch - last_epoch
+        if elapsed < TIKTOK_REFRESH_COOLDOWN_SECONDS:
+            status["reason"] = "cooldown"
+            status["cooldown_seconds_remaining"] = int(TIKTOK_REFRESH_COOLDOWN_SECONDS - elapsed)
+            return status
 
-    elapsed = now_epoch - last_epoch
-    if elapsed < TIKTOK_REFRESH_COOLDOWN_SECONDS:
-        status["reason"] = "cooldown"
-        status["cooldown_seconds_remaining"] = int(TIKTOK_REFRESH_COOLDOWN_SECONDS - elapsed)
-        return status
+        inflight_until = await _dict_get_float_aio(tiktok_refresh_inflight_dict, key, default=0.0)
+        if inflight_until > now_epoch:
+            status["reason"] = "inflight"
+            status["cooldown_seconds_remaining"] = int(inflight_until - now_epoch)
+            return status
 
-    try:
-        from modal_app.pipelines.tiktok import ingest_tiktok_for_profile
+        await tiktok_refresh_inflight_dict.put.aio(key, now_epoch + TIKTOK_REFRESH_INFLIGHT_SECONDS)
 
-        ingest_tiktok_for_profile.spawn(
-            business_type=business_type or "small business",
-            neighborhood=neighborhood,
-            transcribe=False,
-        )
-        tiktok_refresh_dict[key] = now_epoch
-        status["requested"] = True
-        status["reason"] = "stale" if stale else "insufficient"
-    except Exception as exc:
-        status["reason"] = f"spawn_error:{exc}"
+        try:
+            from modal_app.pipelines.tiktok import ingest_tiktok_for_profile
+
+            await ingest_tiktok_for_profile.spawn.aio(
+                business_type=business_type or "small business",
+                neighborhood=neighborhood,
+                transcribe=False,
+            )
+            await tiktok_refresh_dict.put.aio(key, now_epoch)
+            status["requested"] = True
+            status["reason"] = "stale" if stale else "insufficient"
+        except Exception as exc:
+            # Allow quick retry if spawn itself failed.
+            await tiktok_refresh_inflight_dict.put.aio(key, 0.0)
+            status["reason"] = f"spawn_error:{exc}"
 
     return status
 

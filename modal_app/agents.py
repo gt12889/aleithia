@@ -704,17 +704,6 @@ async def orchestrate_query(user_id: str, question: str, business_type: str, tar
         reg_handle = regulatory_agent.spawn(business_type=business_type, trace_context=child_ctx)
         agent_handles.append(("regulatory", "all", reg_handle))
 
-        # TikTok: fire-and-forget scrape — results land on volume for Community tab on next refresh
-        try:
-            from modal_app.pipelines.tiktok import ingest_tiktok_for_profile
-            ingest_tiktok_for_profile.spawn(
-                business_type=business_type or "small business",
-                neighborhood=target_neighborhood,
-                transcribe=False,
-            )
-        except Exception:
-            pass
-
         # Gather results
         agent_results = {}
         for agent_type, name, handle in agent_handles:
