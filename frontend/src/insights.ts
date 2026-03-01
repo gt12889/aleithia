@@ -24,7 +24,7 @@ const WEIGHTS: Record<RiskProfile, Record<string, number>> = {
   },
 }
 
-const LICENSE_MAP: Record<string, string[]> = {
+export const LICENSE_MAP: Record<string, string[]> = {
   'Restaurant': ['retail food', 'restaurant', 'tavern', 'caterer'],
   'Coffee Shop': ['retail food', 'coffee'],
   'Bar': ['tavern', 'liquor', 'late night'],
