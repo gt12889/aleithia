@@ -5,7 +5,7 @@ import BlurText from './BlurText'
 import type { Application } from '@splinetool/runtime'
 import CityGlobe from './CityGlobe'
 import LogoLoop from './LogoLoop'
-import { ArizeAILogo, ModelLogo, OpenAILogo } from './SponsorLogos'
+import { ActianVectorAILogo, ArizeAILogo, ModelLogo, OpenAILogo } from './SponsorLogos'
 
 const SPONSOR_LOGO_SVGS = {
   modal: '/logo/modal-wordmark.svg',
@@ -47,6 +47,7 @@ const SPONSOR_LOGOS = [
   { node: <ModelLogo name="Qwen3-8B" />, large: true },
   { node: <HfLogoWithName name="BART-large-MNLI" />, large: true },
   { node: <ModelLogo name="RoBERTa-Sentiment" />, large: true },
+  { node: <ActianVectorAILogo />, large: true },
 ]
 
 function makeStatic(app: Application) {
@@ -328,6 +329,101 @@ export default function LandingPage({ onGetStarted, onViewSource, onViewWhyUs }:
         </div>
       </section>
 
+      {/* ── Self-Deploying AI ── */}
+      <section className="border-t border-white/[0.04] py-20">
+        <div className="max-w-5xl mx-auto px-10">
+          <div className="grid lg:grid-cols-2 gap-16 items-center">
+            {/* Left: copy */}
+            <div>
+              <p className="text-xs font-mono uppercase tracking-[0.25em] text-violet-400/60 mb-4">
+                Recursive Agent Architecture
+              </p>
+              <h2 className="text-3xl sm:text-4xl font-bold tracking-tight text-white mb-5">
+                AI that deploys AI.
+              </h2>
+              <p className="text-base text-white/45 leading-relaxed mb-6">
+                A Lead Analyst agent monitors every enriched document in real time.
+                When it detects a high-impact event, it autonomously spawns 4 specialized
+                worker agents — real estate, legal, economic, and community sentiment —
+                each running in isolated cloud sandboxes. Workers investigate in parallel,
+                return findings, and the Lead Analyst synthesizes a single impact brief.
+                No human triggers any of this.
+              </p>
+              <div className="flex items-center gap-6 text-[10px] font-mono text-white/25 uppercase tracking-wider">
+                <span>5-min scan cycle</span>
+                <span className="text-white/10">|</span>
+                <span>4 parallel workers</span>
+                <span className="text-white/10">|</span>
+                <span>E2B sandboxed</span>
+              </div>
+            </div>
+
+            {/* Right: mini agent tree diagram */}
+            <div className="flex justify-center">
+              <div className="flex flex-col items-center gap-0">
+                {/* Lead Analyst */}
+                <div className="border border-violet-500/30 bg-violet-500/[0.06] px-6 py-3 text-center">
+                  <span className="text-[10px] font-mono font-bold text-violet-300 uppercase tracking-wider">
+                    Lead Analyst
+                  </span>
+                  <p className="text-[8px] font-mono text-white/20 mt-0.5">Qwen3-8B</p>
+                </div>
+
+                {/* Trunk */}
+                <div className="w-px h-6 bg-violet-500/20" />
+
+                {/* Gate */}
+                <div className="border border-amber-500/20 bg-amber-500/[0.04] px-4 py-1">
+                  <span className="text-[7px] font-mono uppercase tracking-wider text-amber-400/60">
+                    score ≥ 7 → spawn
+                  </span>
+                </div>
+
+                {/* Branch */}
+                <div className="relative w-64 h-6">
+                  <div className="absolute top-0 left-[10%] right-[10%] h-px bg-white/[0.08]" />
+                  {[0, 1, 2, 3].map(i => (
+                    <div key={i} className="absolute top-0 h-full w-px bg-white/[0.08]" style={{ left: `${10 + i * 26.67}%` }} />
+                  ))}
+                </div>
+
+                {/* Workers */}
+                <div className="grid grid-cols-4 gap-1.5 w-64">
+                  {[
+                    { label: 'Real Estate', color: 'text-cyan-400', border: 'border-cyan-500/25' },
+                    { label: 'Legal', color: 'text-violet-400', border: 'border-violet-500/25' },
+                    { label: 'Economic', color: 'text-amber-400', border: 'border-amber-500/25' },
+                    { label: 'Community', color: 'text-emerald-400', border: 'border-emerald-500/25' },
+                  ].map(w => (
+                    <div key={w.label} className={`border ${w.border} bg-white/[0.02] p-1.5 text-center`}>
+                      <div className={`w-1 h-1 rounded-full ${w.color.replace('text-', 'bg-')} mx-auto mb-1 animate-pulse`} />
+                      <span className={`text-[7px] font-mono uppercase ${w.color}`}>{w.label}</span>
+                      <p className="text-[6px] font-mono text-white/15 mt-0.5">E2B</p>
+                    </div>
+                  ))}
+                </div>
+
+                {/* Merge */}
+                <div className="relative w-64 h-4">
+                  {[0, 1, 2, 3].map(i => (
+                    <div key={i} className="absolute bottom-0 h-full w-px bg-white/[0.06]" style={{ left: `${10 + i * 26.67}%` }} />
+                  ))}
+                  <div className="absolute bottom-0 left-[10%] right-[10%] h-px bg-white/[0.06]" />
+                </div>
+                <div className="w-px h-4 bg-white/[0.08]" />
+
+                {/* Output */}
+                <div className="border border-emerald-500/25 bg-emerald-500/[0.04] px-6 py-2 text-center">
+                  <span className="text-[10px] font-mono font-bold text-emerald-300 uppercase tracking-wider">
+                    Impact Brief
+                  </span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
       {/* ── Interactive 3D Section ── */}
       <section className="relative h-[50vh] overflow-hidden border-t border-white/[0.04]">
         <div className="absolute inset-0 scale-[1.8] -rotate-[22deg] origin-center translate-x-1/3 translate-y-[20%] pointer-events-none">
@@ -345,7 +441,7 @@ export default function LandingPage({ onGetStarted, onViewSource, onViewWhyUs }:
             Memory Graph
           </h2>
           <p className="text-sm text-white/50 mb-8 max-w-xl">
-            Documents connected by semantic similarity.
+            Documents connected by semantic similarity, powered by Actian VectorAI DB with HNSW-indexed 384-dim embeddings for sub-15ms retrieval.
           </p>
           <button
             onClick={onViewSource}
