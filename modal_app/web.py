@@ -994,6 +994,17 @@ async def status():
     except Exception:
         pass
 
+    # VectorDB health
+    vectordb_health = {"status": "not_configured"}
+    try:
+        from modal_app.vectordb import vectordb_available
+        if vectordb_available():
+            vdb_cls = modal.Cls.from_name("alethia", "VectorDBService")
+            vdb = vdb_cls()
+            vectordb_health = vdb.health_check.remote()
+    except Exception:
+        vectordb_health = {"status": "unavailable"}
+
     return {
         "pipelines": pipeline_status,
         "enriched_docs": enriched_count,
@@ -1005,6 +1016,7 @@ async def status():
         },
         "costs": costs,
         "total_docs": sum(p.get("doc_count", 0) for p in pipeline_status.values()),
+        "vectordb": vectordb_health,
     }
 
 
@@ -2467,7 +2479,18 @@ async def gpu_metrics():
 
 @web_app.get("/health")
 async def health():
-    return {"status": "ok", "timestamp": datetime.now(timezone.utc).isoformat()}
+    # VectorDB health
+    vectordb_health = {"status": "not_configured"}
+    try:
+        from modal_app.vectordb import vectordb_available
+        if vectordb_available():
+            vdb_cls = modal.Cls.from_name("alethia", "VectorDBService")
+            vdb = vdb_cls()
+            vectordb_health = vdb.health_check.remote()
+    except Exception:
+        vectordb_health = {"status": "unavailable"}
+
+    return {"status": "ok", "timestamp": datetime.now(timezone.utc).isoformat(), "vectordb": vectordb_health}
 
 
 @web_app.post("/demo/scale")

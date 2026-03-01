@@ -195,6 +195,18 @@ async def data_reconciler():
     print(f"Reconciler: {len(stale_sources)} stale, {len(restarted)} restarted, {len(skipped)} skipped (backoff)")
     print(f"Status: {json.dumps(status_report, indent=2, default=str)}")
 
+    # Check VectorAI DB health
+    vectordb_status = {"status": "not_configured"}
+    try:
+        from modal_app.vectordb import vectordb_available
+        if vectordb_available():
+            vdb_cls = modal.Cls.from_name("alethia", "VectorDBService")
+            vdb = vdb_cls()
+            vectordb_status = vdb.health_check.remote()
+    except Exception as e:
+        vectordb_status = {"status": "error", "error": str(e)}
+    status_report["vectordb"] = vectordb_status
+
     return {
         "stale_sources": stale_sources,
         "restarted": restarted,
