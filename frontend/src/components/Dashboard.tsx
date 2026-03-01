@@ -1,15 +1,11 @@
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useRef, useMemo } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { SignedIn, SignedOut, SignInButton, SignUpButton, useClerk, useUser } from '@clerk/clerk-react'
-<<<<<<< HEAD
-import type { UserProfile, NeighborhoodData, DataSources, ChatMessage, RiskScore, CCTVData, Document } from '../types/index.ts'
+import type { UserProfile, NeighborhoodData, DataSources, ChatMessage, RiskScore } from '../types/index.ts'
 import { api, streamChat } from '../api.ts'
 import type { ProcessStage } from './ProcessFlow.tsx'
-=======
-import type { UserProfile, NeighborhoodData, DataSources, RiskScore } from '../types/index.ts'
-import { api } from '../api.ts'
->>>>>>> 3290bc39cb9d263e839f37975962e9c3a2f08abd
 import RiskCard from './RiskCard.tsx'
+import ChatPanel from './ChatPanel.tsx'
 import MapView from './MapView.tsx'
 import Timer from './Timer.tsx'
 import DataSourceBadge from './DataSourceBadge.tsx'
@@ -26,15 +22,19 @@ import MLMonitor from './MLMonitor.tsx'
 import CCTVFeedCard from './CCTVFeedCard.tsx'
 import InsightsCard from './InsightsCard.tsx'
 
-type Tab = 'overview' | 'inspections' | 'permits' | 'licenses' | 'news' | 'community' | 'market' | 'vision' | 'models'
+type Tab = 'overview' | 'inspections' | 'permits' | 'licenses' | 'news' | 'community' | 'market' | 'models'
 
-interface RiskBrief {
-  riskTolerance: 'low' | 'medium' | 'high'
-  riskBand: 'low' | 'moderate' | 'high'
-  headline: string
-  highlight: string
-  summary: string
-  recommendation: string
+interface AgentInfo {
+  agents_deployed: number
+  neighborhoods: string[]
+  data_points: number
+  agent_summaries?: Array<{
+    name: string
+    data_points: number
+    sources?: string[]
+    regulation_count?: number
+    error?: boolean
+  }>
 }
 
 function computeRiskScore(data: NeighborhoodData, profile: UserProfile): RiskScore {
@@ -165,46 +165,6 @@ function computeRiskScore(data: NeighborhoodData, profile: UserProfile): RiskSco
   }
 }
 
-function buildRiskBrief(profile: UserProfile, data: NeighborhoodData, riskScore: RiskScore | null): RiskBrief {
-  const riskTolerance = profile.risk_tolerance ?? 'medium'
-  const score = riskScore?.overall_score ?? data.metrics?.risk_score ?? 5
-
-  const riskBand: 'low' | 'moderate' | 'high' = score <= 4 ? 'low' : score <= 7 ? 'moderate' : 'high'
-  const inspectionFailRate = data.inspection_stats.total > 0
-    ? Math.round((data.inspection_stats.failed / data.inspection_stats.total) * 100)
-    : 0
-
-  const riskLabel = riskBand === 'low' ? 'lower-risk' : riskBand === 'moderate' ? 'balanced-risk' : 'higher-risk'
-  const densityLabel = data.license_count > 20 ? 'high competition' : data.license_count > 8 ? 'moderate competition' : 'lower competition'
-
-  const toleranceNarrative = {
-    low: 'Safety-first strategy favors predictable permit and compliance environments.',
-    medium: 'Balanced strategy supports selective expansion with clear guardrails.',
-    high: 'Growth strategy can absorb volatility for upside opportunities.',
-  }[riskTolerance]
-
-  const recommendation = {
-    low: riskBand === 'high'
-      ? 'Recommendation: delay launch or narrow scope until compliance and competition signals improve.'
-      : 'Recommendation: proceed with a controlled launch and strong compliance checklist.',
-    medium: riskBand === 'high'
-      ? 'Recommendation: proceed only with phased rollout and conservative budgeting.'
-      : 'Recommendation: proceed with standard due diligence and weekly signal monitoring.',
-    high: riskBand === 'low'
-      ? 'Recommendation: favorable conditions for an assertive launch and faster expansion testing.'
-      : 'Recommendation: acceptable for growth-oriented entry if operations can handle variability.',
-  }[riskTolerance]
-
-  return {
-    riskTolerance,
-    riskBand,
-    headline: `${profile.business_type} in ${profile.neighborhood}: ${riskLabel} setup`,
-    highlight: `${data.inspection_stats.total} inspections (${inspectionFailRate}% fail), ${data.permit_count} permits, ${data.license_count} licenses, ${data.news.length + data.politics.length} recent intel items; market shows ${densityLabel}.`,
-    summary: `${toleranceNarrative} Current score is ${score.toFixed(1)}/10 with ${Math.round((riskScore?.confidence ?? 0.6) * 100)}% confidence from local operational and regulatory signals.`,
-    recommendation,
-  }
-}
-
 interface Props {
   profile: UserProfile
   onReset: () => void
@@ -217,9 +177,20 @@ export default function Dashboard({ profile, onReset }: Props) {
   const [neighborhoodData, setNeighborhoodData] = useState<NeighborhoodData | null>(null)
   const [sources, setSources] = useState<DataSources | null>(null)
   const [riskScore, setRiskScore] = useState<RiskScore | null>(null)
+  const [messages, setMessages] = useState<ChatMessage[]>([])
+  const [chatLoading, setChatLoading] = useState(false)
+  const [isStreaming, setIsStreaming] = useState(false)
+  const [statusMessage, setStatusMessage] = useState('')
+  const [agentInfo, setAgentInfo] = useState<AgentInfo | null>(null)
+  const [agentActive, setAgentActive] = useState(false)
+  const [agentElapsedMs, setAgentElapsedMs] = useState<number | undefined>(undefined)
+  const [processStage, setProcessStage] = useState<ProcessStage>('idle')
+  const [chatQuestion, setChatQuestion] = useState('')
+  const processLogs = useRef<string[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [activeTab, setActiveTab] = useState<Tab>('overview')
+  const userId = user?.id ?? `anon_${Date.now()}`
 
   const refreshData = async () => {
     try {
@@ -244,17 +215,149 @@ export default function Dashboard({ profile, onReset }: Props) {
   }, [profile])
 
   const sourceList = sources
-    ? (Object.entries(sources) as Array<[string, { count: number; active: boolean }]>).map(([name, info]) => ({
+    ? Object.entries(sources).map(([name, info]) => ({
         name: name.replace('_', ' '),
         count: info.count,
         active: info.active,
       }))
     : []
 
-  const riskBrief = useMemo(() => {
-    if (!neighborhoodData) return null
-    return buildRiskBrief(profile, neighborhoodData, riskScore)
-  }, [profile, neighborhoodData, riskScore])
+  const handleChat = async (message: string) => {
+    setMessages(prev => [...prev, { role: 'user', content: message, timestamp: new Date() }])
+    setChatLoading(true)
+    setAgentActive(true)
+    setAgentInfo(null)
+    setStatusMessage('')
+    setProcessStage('deploying')
+    setChatQuestion(message)
+    processLogs.current = [`--- query ---\n${message}\n\n--- trace ---`, `[${new Date().toISOString()}] start`]
+    const startTime = Date.now()
+    let responseAccum = ''
+
+    // Add empty assistant message for streaming
+    setMessages(prev => [...prev, { role: 'assistant', content: '', timestamp: new Date() }])
+    setIsStreaming(true)
+
+    try {
+      await streamChat(message, profile, {
+        onStatus: (content) => {
+          setStatusMessage(content)
+          processLogs.current.push(`[+${Date.now() - startTime}ms] status: ${content}`)
+          if (content.toLowerCase().includes('synth')) {
+            setProcessStage('synthesizing')
+          }
+        },
+        onAgents: (data) => {
+          setAgentInfo(data)
+          setAgentActive(false)
+          setAgentElapsedMs(Date.now() - startTime)
+          setProcessStage('agents_complete')
+          processLogs.current.push(`[+${Date.now() - startTime}ms] agents: ${data.agents_deployed} deployed, ${data.data_points} pts, neighborhoods=[${data.neighborhoods.join(', ')}]`)
+          if (data.agent_summaries) {
+            for (const a of data.agent_summaries) {
+              processLogs.current.push(`  agent ${a.name}: ${a.data_points} pts${a.sources ? ` sources=[${a.sources.join(',')}]` : ''}${a.regulation_count ? ` regs=${a.regulation_count}` : ''}${a.error ? ' ERROR' : ''}`)
+            }
+          }
+        },
+        onToken: (token) => {
+          setStatusMessage('')
+          setProcessStage('streaming')
+          responseAccum += token
+          setMessages(prev => {
+            const updated = [...prev]
+            const last = updated[updated.length - 1]
+            if (last && last.role === 'assistant') {
+              updated[updated.length - 1] = { ...last, content: last.content + token }
+            }
+            return updated
+          })
+        },
+        onDone: () => {
+          setIsStreaming(false)
+          setChatLoading(false)
+          setProcessStage('complete')
+          processLogs.current.push(`[+${Date.now() - startTime}ms] done, total=${Date.now() - startTime}ms`)
+          processLogs.current.push(`\n--- response ---\n${responseAccum}`)
+
+          if (user) {
+            api.saveUserSettings(user.id, profile.business_type, profile.neighborhood).catch(() => {})
+          }
+
+          setMessages(prev => {
+            const updated = [...prev]
+            updated[updated.length - 1] = { ...updated[updated.length - 1], timestamp: new Date() }
+            return updated
+          })
+
+          // Auto-refresh data after chat — TikTok scrape may have landed new data on volume
+          setTimeout(() => refreshData(), 30_000)
+        },
+        onError: (_errorMsg) => {
+          // Fallback to local response
+          setIsStreaming(false)
+          setAgentActive(false)
+          setStatusMessage('')
+          setProcessStage('complete')
+          processLogs.current.push(`[+${Date.now() - startTime}ms] error: ${_errorMsg} (local fallback)`)
+
+          const nb = profile.neighborhood
+          const biz = profile.business_type.toLowerCase()
+          let response = ''
+
+          if (message.toLowerCase().includes('permit')) {
+            const permits = neighborhoodData?.permits || []
+            response = `Based on ${permits.length} recent permits in ${nb}:\n\n`
+            if (permits.length > 0) {
+              response += permits.slice(0, 3).map(p => {
+                const r = p.metadata?.raw_record || {} as Record<string, string>
+                return `- ${r.work_type || 'Permit'}: ${r.street_number || ''} ${r.street_direction || ''} ${r.street_name || ''} (${r.permit_status || 'Active'})`
+              }).join('\n')
+            }
+            response += `\n\nFor a ${biz}, you'll typically need a Limited Business License and applicable permits for your specific operation.`
+          } else if (message.toLowerCase().includes('inspection') || message.toLowerCase().includes('health')) {
+            const stats = neighborhoodData?.inspection_stats || { total: 0, failed: 0, passed: 0 }
+            response = `Food inspection data for ${nb}:\n\n`
+            response += `- **Total inspections:** ${stats.total}\n- **Passed:** ${stats.passed}\n- **Failed:** ${stats.failed}\n`
+            if (stats.total > 0) {
+              response += `- **Pass rate:** ${Math.round((stats.passed / stats.total) * 100)}%\n`
+            }
+            response += `\nThis data helps gauge the regulatory environment you'll be operating in.`
+          } else if (message.toLowerCase().includes('competition') || message.toLowerCase().includes('business')) {
+            const licenses = neighborhoodData?.licenses || []
+            response = `There are **${licenses.length}** active business licenses in ${nb}.\n\n`
+            if (licenses.length > 0) {
+              response += 'Nearby businesses include:\n'
+              response += licenses.slice(0, 5).map(l => {
+                const r = l.metadata?.raw_record || {} as Record<string, string>
+                return `- ${r.doing_business_as_name || r.legal_name || 'Unknown'} (${r.license_description || 'Business'})`
+              }).join('\n')
+            }
+          } else {
+            const total = (neighborhoodData?.inspection_stats.total || 0) + (neighborhoodData?.permit_count || 0) + (neighborhoodData?.license_count || 0)
+            response = `Here's what I found about **${nb}** for a ${biz}:\n\n`
+            response += `We analyzed **${total}** data points across food inspections, building permits, and business licenses.\n\n`
+            if (riskScore) {
+              response += `**Risk score:** ${riskScore.overall_score}/10 (${riskScore.overall_score <= 4 ? 'low' : riskScore.overall_score <= 7 ? 'moderate' : 'high'} risk)\n\n`
+            }
+            response += 'Ask me about specific topics: permits, inspections, competition, or zoning.'
+          }
+
+          processLogs.current.push(`\n--- response (local fallback) ---\n${response}`)
+          setMessages(prev => {
+            const updated = [...prev]
+            updated[updated.length - 1] = { role: 'assistant', content: response, timestamp: new Date() }
+            return updated
+          })
+          setChatLoading(false)
+        },
+      }, userId)
+    } catch {
+      setIsStreaming(false)
+      setChatLoading(false)
+      setAgentActive(false)
+      setProcessStage('complete')
+    }
+  }
 
   const allTabs: { key: Tab; label: string; count?: number; isEmpty?: () => boolean }[] = [
     { key: 'overview', label: 'Overview' },
@@ -264,10 +367,9 @@ export default function Dashboard({ profile, onReset }: Props) {
     { key: 'news', label: 'Intel', count: (neighborhoodData?.news.length || 0) + (neighborhoodData?.politics.length || 0), isEmpty: () => !((neighborhoodData?.news.length || 0) + (neighborhoodData?.politics.length || 0)) },
     { key: 'community', label: 'Community', count: (neighborhoodData?.reddit?.length || 0) + (neighborhoodData?.tiktok?.length || 0), isEmpty: () => !((neighborhoodData?.reddit?.length || 0) + (neighborhoodData?.tiktok?.length || 0)) },
     { key: 'market', label: 'Market', count: (neighborhoodData?.reviews?.length || 0) + (neighborhoodData?.realestate?.length || 0), isEmpty: () => !((neighborhoodData?.reviews?.length || 0) + (neighborhoodData?.realestate?.length || 0)) },
-    { key: 'vision', label: 'Vision', count: neighborhoodData?.cctv?.cameras.length || 0, isEmpty: () => false },
     { key: 'models', label: 'Models' },
   ]
-  const tabs: Array<{ key: Tab; label: string; count?: number; isEmpty?: () => boolean }> = useMemo(
+  const tabs = useMemo(
     () => allTabs.filter(t => !t.isEmpty || !(t.isEmpty?.() ?? false)),
     [
       neighborhoodData?.inspection_stats.total,
@@ -279,10 +381,9 @@ export default function Dashboard({ profile, onReset }: Props) {
       neighborhoodData?.tiktok?.length,
       neighborhoodData?.reviews?.length,
       neighborhoodData?.realestate?.length,
-      neighborhoodData?.cctv?.cameras.length,
     ]
   )
-  const visibleTabKeys = useMemo(() => tabs.map((t: { key: Tab }) => t.key), [tabs])
+  const visibleTabKeys = useMemo(() => tabs.map(t => t.key), [tabs])
 
   useEffect(() => {
     if (!visibleTabKeys.includes(activeTab)) {
@@ -360,7 +461,7 @@ export default function Dashboard({ profile, onReset }: Props) {
 
           {/* Tabs */}
           <div className="flex gap-0 border-b border-white/[0.06]">
-            {tabs.map((tab: { key: Tab; label: string; count?: number }) => (
+            {tabs.map(tab => (
               <button
                 key={tab.key}
                 onClick={() => setActiveTab(tab.key)}
@@ -505,10 +606,6 @@ export default function Dashboard({ profile, onReset }: Props) {
                 <MarketPanel reviews={neighborhoodData.reviews || []} realestate={neighborhoodData.realestate || []} />
               )}
 
-              {activeTab === 'vision' && (
-                <VisionTab cctv={neighborhoodData?.cctv ?? null} traffic={neighborhoodData?.traffic ?? []} />
-              )}
-
               {activeTab === 'models' && (
                 <MLMonitor />
               )}
@@ -516,44 +613,8 @@ export default function Dashboard({ profile, onReset }: Props) {
           )}
         </div>
 
-        {/* Right: Risk Summary */}
+        {/* Right: Chat */}
         <div className="w-96 border-l border-white/[0.06] p-4">
-          <div className="border border-white/[0.08] bg-white/[0.02] p-5 space-y-4">
-            <div>
-              <p className="text-[10px] font-mono uppercase tracking-[0.2em] text-white/30">Neighborhood Brief</p>
-              <h3 className="mt-2 text-sm font-semibold text-white/90">
-                {riskBrief?.headline ?? `${profile.business_type} in ${profile.neighborhood}`}
-              </h3>
-            </div>
-
-            <div className="grid grid-cols-2 gap-3">
-              <div className="border border-white/[0.06] bg-black/20 p-3">
-                <p className="text-[10px] font-mono uppercase tracking-wider text-white/30">Risk Tolerance</p>
-                <p className="mt-1 text-sm font-semibold text-white capitalize">{riskBrief?.riskTolerance ?? 'medium'}</p>
-              </div>
-              <div className="border border-white/[0.06] bg-black/20 p-3">
-                <p className="text-[10px] font-mono uppercase tracking-wider text-white/30">Risk Band</p>
-                <p className="mt-1 text-sm font-semibold text-white capitalize">{riskBrief?.riskBand ?? 'moderate'}</p>
-              </div>
-            </div>
-
-            <p className="text-xs text-white/75 leading-relaxed">
-              {riskBrief?.highlight ?? 'Loading operating signal highlights...'}
-            </p>
-            <p className="text-xs text-white/65 leading-relaxed">
-              {riskBrief?.summary ?? 'Loading risk summary...'}
-            </p>
-
-            <div className="border border-emerald-500/20 bg-emerald-500/[0.06] p-3">
-              <p className="text-[10px] font-mono uppercase tracking-wider text-emerald-300/70">Recommendation</p>
-              <p className="mt-1 text-xs text-emerald-200/90 leading-relaxed">
-                {riskBrief?.recommendation ?? 'Recommendation will appear once neighborhood metrics are loaded.'}
-              </p>
-            </div>
-          </div>
-
-          {/*
-          Chatbox disabled per request. Kept here intentionally (do not delete).
           <ChatPanel
             messages={messages}
             onSend={handleChat}
@@ -566,346 +627,9 @@ export default function Dashboard({ profile, onReset }: Props) {
             processStage={processStage}
             chatQuestion={chatQuestion}
             processLogs={processLogs.current}
-            neighborhood={profile.neighborhood}
-            businessType={profile.business_type}
           />
-          */}
         </div>
       </div>
-    </div>
-  )
-}
-
-const YOLO_CLASSES = ['person', 'bicycle', 'car', 'motorcycle', 'bus', 'truck'] as const
-
-const PIPELINE_STEPS = [
-  { label: 'IDOT CCTV', sub: 'Camera snapshots' },
-  { label: 'Download', sub: 'Frame capture' },
-  { label: 'YOLOv8n', sub: 'T4 GPU inference' },
-  { label: 'Counting', sub: 'Ped / veh / bike' },
-  { label: 'Scoring', sub: 'Density classification' },
-] as const
-
-function VisionTab({ cctv, traffic }: { cctv: CCTVData | null; traffic: Document[] }) {
-  const [expandedCam, setExpandedCam] = useState<string | null>(null)
-  const cameras = cctv?.cameras ?? []
-
-  // Aggregate stats
-  const totalPeds = cameras.reduce((s, c) => s + c.pedestrians, 0)
-  const totalVehs = cameras.reduce((s, c) => s + c.vehicles, 0)
-  const totalBikes = cameras.reduce((s, c) => s + c.bicycles, 0)
-  const totalDetections = totalPeds + totalVehs + totalBikes
-  const pedPct = totalDetections > 0 ? Math.round((totalPeds / totalDetections) * 100) : 0
-  const vehPct = totalDetections > 0 ? Math.round((totalVehs / totalDetections) * 100) : 0
-  const bikePct = totalDetections > 0 ? 100 - pedPct - vehPct : 0
-
-  const densityCounts = { high: 0, medium: 0, low: 0, unknown: 0 }
-  for (const c of cameras) densityCounts[c.density_level]++
-  const avgDensity = cameras.length > 0
-    ? (densityCounts.high >= densityCounts.medium && densityCounts.high >= densityCounts.low ? 'high' : densityCounts.medium >= densityCounts.low ? 'medium' : 'low')
-    : 'n/a'
-
-  const selectedCamera = expandedCam ? cameras.find(c => c.camera_id === expandedCam) : null
-
-  return (
-    <div className="space-y-4">
-      {/* Section A: Pipeline Overview */}
-      <div className="border border-white/[0.06] bg-white/[0.02] p-5">
-        <h3 className="text-[10px] font-mono font-medium uppercase tracking-wider text-white/30 mb-4">
-          Vision Pipeline
-        </h3>
-        <div className="flex items-center gap-0">
-          {PIPELINE_STEPS.map((step, i) => (
-            <div key={step.label} className="flex items-center">
-              <div className="flex flex-col items-center text-center w-28">
-                <div className="w-10 h-10 rounded-full border border-white/10 bg-white/[0.03] flex items-center justify-center mb-1.5">
-                  <span className="text-[10px] font-mono font-bold text-white/50">{i + 1}</span>
-                </div>
-                <div className="text-[11px] font-mono text-white/60">{step.label}</div>
-                <div className="text-[9px] font-mono text-white/20">{step.sub}</div>
-              </div>
-              {i < PIPELINE_STEPS.length - 1 && (
-                <div className="flex-shrink-0 w-8 h-px bg-gradient-to-r from-white/15 to-white/5 -mt-4" />
-              )}
-            </div>
-          ))}
-        </div>
-      </div>
-
-      {/* Section B: Model Card */}
-      <div className="border border-white/[0.06] bg-white/[0.02] p-5">
-        <div className="flex items-center justify-between mb-4">
-          <h3 className="text-[10px] font-mono font-medium uppercase tracking-wider text-white/30">
-            Model Card — YOLOv8n
-          </h3>
-          <span className="text-[9px] font-mono px-2 py-0.5 border border-white/10 text-white/25">Ultralytics</span>
-        </div>
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-          <div>
-            <div className="text-[9px] font-mono uppercase tracking-wider text-white/20 mb-1">Parameters</div>
-            <div className="text-sm font-mono text-white/70">3.2M</div>
-          </div>
-          <div>
-            <div className="text-[9px] font-mono uppercase tracking-wider text-white/20 mb-1">GPU</div>
-            <div className="text-sm font-mono text-white/70">NVIDIA T4</div>
-          </div>
-          <div>
-            <div className="text-[9px] font-mono uppercase tracking-wider text-white/20 mb-1">Confidence</div>
-            <div className="text-sm font-mono text-white/70">0.3 threshold</div>
-          </div>
-          <div>
-            <div className="text-[9px] font-mono uppercase tracking-wider text-white/20 mb-1">Features</div>
-            <div className="text-sm font-mono text-white/70">GPU snapshots</div>
-          </div>
-        </div>
-        <div className="mt-3 pt-3 border-t border-white/[0.04]">
-          <div className="text-[9px] font-mono uppercase tracking-wider text-white/20 mb-2">Detected Classes</div>
-          <div className="flex flex-wrap gap-1.5">
-            {YOLO_CLASSES.map(cls => (
-              <span key={cls} className="text-[10px] font-mono px-2 py-0.5 border border-white/[0.08] bg-white/[0.02] text-white/40">
-                {cls}
-              </span>
-            ))}
-          </div>
-        </div>
-      </div>
-
-      {/* Section D: Aggregate Stats */}
-      <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
-        <div className="border border-white/[0.06] bg-white/[0.02] p-4">
-          <div className="text-2xl font-bold font-mono text-white">{cameras.length}</div>
-          <div className="text-[10px] font-mono uppercase tracking-wider text-white/30 mt-1">Cameras</div>
-        </div>
-        <div className="border border-white/[0.06] bg-white/[0.02] p-4">
-          <div className="text-2xl font-bold font-mono text-green-400">{totalPeds}</div>
-          <div className="text-[10px] font-mono uppercase tracking-wider text-white/30 mt-1">Pedestrians</div>
-        </div>
-        <div className="border border-white/[0.06] bg-white/[0.02] p-4">
-          <div className="text-2xl font-bold font-mono text-blue-400">{totalVehs}</div>
-          <div className="text-[10px] font-mono uppercase tracking-wider text-white/30 mt-1">Vehicles</div>
-        </div>
-        <div className="border border-white/[0.06] bg-white/[0.02] p-4">
-          <div className="text-2xl font-bold font-mono text-amber-400">{totalBikes}</div>
-          <div className="text-[10px] font-mono uppercase tracking-wider text-white/30 mt-1">Bicycles</div>
-        </div>
-        <div className="border border-white/[0.06] bg-white/[0.02] p-4">
-          <div className="text-2xl font-bold font-mono text-white/70">{avgDensity}</div>
-          <div className="text-[10px] font-mono uppercase tracking-wider text-white/30 mt-1">Avg Density</div>
-        </div>
-      </div>
-
-      {/* Detection distribution bar */}
-      {totalDetections > 0 && (
-        <div className="border border-white/[0.06] bg-white/[0.02] p-4">
-          <div className="text-[9px] font-mono uppercase tracking-wider text-white/20 mb-2">Detection Distribution</div>
-          <div className="flex h-3 rounded-sm overflow-hidden">
-            <div className="bg-green-500/70" style={{ width: `${pedPct}%` }} />
-            <div className="bg-blue-500/70" style={{ width: `${vehPct}%` }} />
-            <div className="bg-amber-500/70" style={{ width: `${bikePct}%` }} />
-          </div>
-          <div className="flex justify-between mt-2">
-            <span className="text-[10px] font-mono text-green-400/60">Pedestrians {pedPct}%</span>
-            <span className="text-[10px] font-mono text-blue-400/60">Vehicles {vehPct}%</span>
-            <span className="text-[10px] font-mono text-amber-400/60">Bicycles {bikePct}%</span>
-          </div>
-        </div>
-      )}
-
-      {/* Section C: Camera Grid — all cameras */}
-      {cameras.length > 0 ? (
-        <div className="border border-white/[0.06] bg-white/[0.02]">
-          <div className="flex items-center justify-between px-4 py-3 border-b border-white/[0.06]">
-            <div className="flex items-center gap-2">
-              <div className="w-1.5 h-1.5 rounded-full bg-green-400 animate-pulse" />
-              <span className="text-[10px] font-mono uppercase tracking-wider text-white/40">
-                Live Camera Feeds
-              </span>
-            </div>
-            <span className="text-[10px] font-mono text-white/20">
-              {cameras.length} camera{cameras.length !== 1 ? 's' : ''} — click to expand
-            </span>
-          </div>
-          <div className="grid grid-cols-2 lg:grid-cols-4 gap-px bg-white/[0.04]">
-            {cameras.map(cam => (
-              <button
-                key={cam.camera_id}
-                type="button"
-                onClick={() => setExpandedCam(expandedCam === cam.camera_id ? null : cam.camera_id)}
-                className={`relative bg-[#06080d] p-0 cursor-pointer transition-all ${
-                  expandedCam === cam.camera_id ? 'ring-1 ring-white/30' : 'hover:ring-1 hover:ring-white/10'
-                }`}
-              >
-                <div className="relative aspect-video bg-black/40 overflow-hidden">
-                  <img
-                    src={api.cctvFrameUrl(cam.camera_id)}
-                    alt={`Camera ${cam.camera_id}`}
-                    className="w-full h-full object-cover"
-                    loading="lazy"
-                    onError={e => {
-                      const target = e.currentTarget
-                      target.style.display = 'none'
-                      const parent = target.parentElement
-                      if (parent && !parent.querySelector('.fallback')) {
-                        const fb = document.createElement('div')
-                        fb.className = 'fallback absolute inset-0 flex items-center justify-center'
-                        fb.innerHTML = '<span class="text-[10px] font-mono text-white/15">NO SIGNAL</span>'
-                        parent.appendChild(fb)
-                      }
-                    }}
-                  />
-                  <div className="absolute top-1.5 right-1.5 flex gap-1">
-                    <span className="px-1.5 py-0.5 text-[9px] font-mono font-bold bg-green-500/80 text-white rounded-sm">
-                      P:{cam.pedestrians}
-                    </span>
-                    <span className="px-1.5 py-0.5 text-[9px] font-mono font-bold bg-blue-500/80 text-white rounded-sm">
-                      V:{cam.vehicles}
-                    </span>
-                    {cam.bicycles > 0 && (
-                      <span className="px-1.5 py-0.5 text-[9px] font-mono font-bold bg-amber-500/80 text-white rounded-sm">
-                        B:{cam.bicycles}
-                      </span>
-                    )}
-                  </div>
-                </div>
-                <div className="px-2 py-1.5 text-left">
-                  <div className="text-[10px] font-mono text-white/50 truncate">{cam.camera_id}</div>
-                  <div className="flex items-center justify-between mt-0.5">
-                    <span className="text-[9px] font-mono text-white/20">{cam.distance_km?.toFixed(1) ?? '—'}km</span>
-                    <span className={`text-[9px] font-mono ${
-                      cam.density_level === 'high' ? 'text-green-400/60' :
-                      cam.density_level === 'medium' ? 'text-yellow-400/60' :
-                      'text-white/20'
-                    }`}>
-                      {cam.density_level}
-                    </span>
-                  </div>
-                </div>
-              </button>
-            ))}
-          </div>
-
-          {/* Expanded camera detail */}
-          {selectedCamera && (
-            <div className="border-t border-white/[0.06] p-4">
-              <div className="flex gap-4">
-                <div className="flex-1 aspect-video bg-black/40 overflow-hidden relative">
-                  <img
-                    src={api.cctvFrameUrl(selectedCamera.camera_id)}
-                    alt={`Camera ${selectedCamera.camera_id} — expanded`}
-                    className="w-full h-full object-contain"
-                  />
-                  <div className="absolute top-2 right-2 flex gap-1.5">
-                    <span className="px-2 py-1 text-[10px] font-mono font-bold bg-green-500/80 text-white rounded-sm">
-                      P:{selectedCamera.pedestrians}
-                    </span>
-                    <span className="px-2 py-1 text-[10px] font-mono font-bold bg-blue-500/80 text-white rounded-sm">
-                      V:{selectedCamera.vehicles}
-                    </span>
-                    {selectedCamera.bicycles > 0 && (
-                      <span className="px-2 py-1 text-[10px] font-mono font-bold bg-amber-500/80 text-white rounded-sm">
-                        B:{selectedCamera.bicycles}
-                      </span>
-                    )}
-                  </div>
-                </div>
-                <div className="w-48 space-y-3">
-                  <div>
-                    <div className="text-[9px] font-mono uppercase tracking-wider text-white/20 mb-1">Camera</div>
-                    <div className="text-xs font-mono text-white/60">{selectedCamera.camera_id}</div>
-                  </div>
-                  <div>
-                    <div className="text-[9px] font-mono uppercase tracking-wider text-white/20 mb-1">Distance</div>
-                    <div className="text-xs font-mono text-white/60">{selectedCamera.distance_km?.toFixed(1) ?? '—'} km</div>
-                  </div>
-                  <div>
-                    <div className="text-[9px] font-mono uppercase tracking-wider text-white/20 mb-1">Density</div>
-                    <div className={`text-xs font-mono ${
-                      selectedCamera.density_level === 'high' ? 'text-green-400' :
-                      selectedCamera.density_level === 'medium' ? 'text-yellow-400' :
-                      'text-white/40'
-                    }`}>
-                      {selectedCamera.density_level}
-                    </div>
-                  </div>
-                  <div>
-                    <div className="text-[9px] font-mono uppercase tracking-wider text-white/20 mb-1">Detections</div>
-                    <div className="text-xs font-mono text-white/50">
-                      {selectedCamera.pedestrians} ped / {selectedCamera.vehicles} veh / {selectedCamera.bicycles} bike
-                    </div>
-                  </div>
-                  <div>
-                    <div className="text-[9px] font-mono uppercase tracking-wider text-white/20 mb-1">Timestamp</div>
-                    <div className="text-[10px] font-mono text-white/40">
-                      {selectedCamera.timestamp ? new Date(selectedCamera.timestamp).toLocaleString() : '—'}
-                    </div>
-                  </div>
-                  <div>
-                    <div className="text-[9px] font-mono uppercase tracking-wider text-white/20 mb-1">Coordinates</div>
-                    <div className="text-[10px] font-mono text-white/30">
-                      {selectedCamera.lat != null && selectedCamera.lng != null
-                        ? `${selectedCamera.lat.toFixed(4)}, ${selectedCamera.lng.toFixed(4)}`
-                        : '—'}
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </div>
-          )}
-        </div>
-      ) : (
-        <div className="border border-white/[0.06] bg-white/[0.02] p-8 text-center">
-          <div className="text-xs font-mono text-white/20">No camera data available for this neighborhood</div>
-          <div className="text-[10px] font-mono text-white/10 mt-1">CCTV pipeline runs on-demand — camera feeds will appear after analysis</div>
-        </div>
-      )}
-
-      {/* Section E: Traffic Flow table */}
-      {traffic.length > 0 && (
-        <div className="border border-white/[0.06] bg-white/[0.02]">
-          <div className="px-4 py-3 border-b border-white/[0.06]">
-            <h3 className="text-[10px] font-mono font-medium uppercase tracking-wider text-white/30">
-              Traffic Flow — TomTom
-            </h3>
-          </div>
-          <table className="w-full text-left">
-            <thead>
-              <tr className="border-b border-white/[0.04]">
-                <th className="px-4 py-2 text-[9px] font-mono uppercase tracking-wider text-white/20 font-medium">Road Segment</th>
-                <th className="px-4 py-2 text-[9px] font-mono uppercase tracking-wider text-white/20 font-medium">Speed</th>
-                <th className="px-4 py-2 text-[9px] font-mono uppercase tracking-wider text-white/20 font-medium">Free Flow</th>
-                <th className="px-4 py-2 text-[9px] font-mono uppercase tracking-wider text-white/20 font-medium">Congestion</th>
-                <th className="px-4 py-2 text-[9px] font-mono uppercase tracking-wider text-white/20 font-medium">Delay</th>
-              </tr>
-            </thead>
-            <tbody>
-              {traffic.map(doc => {
-                const level = (doc.metadata?.congestion_level as string) || 'free'
-                const speed = (doc.metadata?.current_speed as number) || 0
-                const freeFlow = (doc.metadata?.free_flow_speed as number) || 0
-                const travelTime = (doc.metadata?.travel_time as number) || 0
-                const freeFlowTime = (doc.metadata?.free_flow_travel_time as number) || 0
-                const delay = travelTime > 0 && freeFlowTime > 0 ? Math.max(0, travelTime - freeFlowTime) : 0
-                const road = doc.geo?.neighborhood || doc.title || 'Unknown'
-                const congestionColor =
-                  level === 'blocked' ? 'text-red-400' :
-                  level === 'heavy' ? 'text-orange-400' :
-                  level === 'moderate' ? 'text-yellow-400' :
-                  'text-green-400'
-
-                return (
-                  <tr key={doc.id} className="border-b border-white/[0.03] hover:bg-white/[0.02]">
-                    <td className="px-4 py-2 text-xs font-mono text-white/50 truncate max-w-[200px]">{road}</td>
-                    <td className="px-4 py-2 text-xs font-mono text-white/50">{speed > 0 ? `${speed} mph` : '—'}</td>
-                    <td className="px-4 py-2 text-xs font-mono text-white/30">{freeFlow > 0 ? `${freeFlow} mph` : '—'}</td>
-                    <td className={`px-4 py-2 text-xs font-mono font-medium ${congestionColor}`}>{level}</td>
-                    <td className="px-4 py-2 text-xs font-mono text-white/30">{delay > 0 ? `+${Math.round(delay)}s` : '—'}</td>
-                  </tr>
-                )
-              })}
-            </tbody>
-          </table>
-        </div>
-      )}
     </div>
   )
 }
