@@ -1,5 +1,6 @@
 import { jsPDF } from 'jspdf'
 import type { NeighborhoodData, RiskScore, UserProfile } from '../types/index.ts'
+import { computeInsights } from '../insights.ts'
 
 interface AgentInfo {
   agents_deployed: number
@@ -25,100 +26,124 @@ type Signal = {
   detail: string
 }
 
-function buildAdvantages(data: NeighborhoodData | null): Signal[] {
-  if (!data) return []
+type ScoredSignal = Signal & { priority: number }
 
-  const items: Signal[] = []
-  const stats = data.inspection_stats
-  const passRate = stats.total > 0 ? stats.passed / stats.total : null
-  const avgRating = data.metrics?.avg_review_rating ?? 0
-
-  if (passRate !== null && passRate >= 0.8 && stats.total >= 5) {
-    items.push({
-      title: 'Strong compliance baseline',
-      detail: `${Math.round(passRate * 100)}% pass rate across ${stats.total} nearby food inspections can reduce early operational friction.`,
-    })
-  }
-
-  if (avgRating >= 4.0 && (data.reviews?.length || 0) >= 5) {
-    items.push({
-      title: 'Healthy customer sentiment',
-      detail: `Area businesses average ${avgRating.toFixed(1)}/5 across ${data.reviews?.length || 0} reviews, indicating active demand with positive sentiment.`,
-    })
-  }
-
-  if (data.cctv && data.cctv.cameras.length > 0 && (data.cctv.density === 'high' || data.cctv.density === 'medium')) {
-    items.push({
-      title: 'Consistent street activity',
-      detail: `${data.cctv.cameras.length} nearby cameras report ${data.cctv.density} foot traffic (avg ${data.cctv.avg_pedestrians} pedestrians), supporting walk-in potential.`,
-    })
-  }
-
-  if (data.permit_count >= 8) {
-    items.push({
-      title: 'Growth and reinvestment signal',
-      detail: `${data.permit_count} active permits suggest ongoing neighborhood investment and business momentum.`,
-    })
-  }
-
-  if (items.length === 0) {
-    items.push({
-      title: 'Balanced baseline indicators',
-      detail: 'Core public-data coverage is present, enabling a measured launch with targeted validation before expansion.',
-    })
-  }
-
-  return items.slice(0, 2)
+const CATEGORY_TITLES: Record<string, string> = {
+  regulatory: 'Regulatory environment',
+  economic: 'Economic momentum',
+  market: 'Market demand and competition',
+  demographic: 'Demographic fit',
+  safety: 'Safety and access',
+  community: 'Community momentum',
 }
 
-function buildRisks(data: NeighborhoodData | null): Signal[] {
+const CRITICAL_MISSING_DATA_CHECKS: Array<{
+  key: string
+  title: string
+  detail: string
+  isMissing: (data: NeighborhoodData) => boolean
+}> = [
+  {
+    key: 'regulatory',
+    title: 'Missing compliance baseline data',
+    detail: 'No food inspection coverage is available, which makes licensing/compliance risk harder to quantify before launch.',
+    isMissing: (data) => (data.inspection_stats.total ?? 0) === 0 && data.inspections.length === 0,
+  },
+  {
+    key: 'market',
+    title: 'Missing customer demand signal',
+    detail: 'No review data is available, reducing confidence in pricing power and product-market fit assumptions.',
+    isMissing: (data) => (data.reviews?.length || 0) === 0,
+  },
+  {
+    key: 'safety',
+    title: 'Missing foot-traffic visibility',
+    detail: 'Limited CCTV/traffic observations create uncertainty in pedestrian flow and delivery accessibility forecasts.',
+    isMissing: (data) => !data.cctv || data.cctv.cameras.length === 0 || (data.traffic?.length || 0) === 0,
+  },
+  {
+    key: 'demographic',
+    title: 'Missing demographic depth',
+    detail: 'Demographic baselines are incomplete, making purchasing-power and audience-fit estimates less reliable.',
+    isMissing: (data) => !data.demographics,
+  },
+]
+
+function buildAdvantages(data: NeighborhoodData | null, profile: UserProfile): Signal[] {
   if (!data) return []
 
-  const items: Signal[] = []
-  const stats = data.inspection_stats
-  const failRate = stats.total > 0 ? stats.failed / stats.total : null
-  const avgRating = data.metrics?.avg_review_rating ?? 0
-  const congestedCount = (data.traffic || []).filter(t => {
-    const level = (t.metadata?.congestion_level as string | undefined)?.toLowerCase()
-    return level === 'heavy' || level === 'blocked'
-  }).length
+  const insights = computeInsights(data, profile, 'conservative')
+  const positive = insights.categories
+    .filter(cat => cat.signal !== 'negative')
+    .sort((a, b) => b.score - a.score)
+    .map<ScoredSignal>((cat) => ({
+      priority: cat.score,
+      title: CATEGORY_TITLES[cat.id] ?? cat.name,
+      detail: `${cat.claim} (Business Intelligence Score: ${cat.score}/100).`,
+    }))
 
-  if (failRate !== null && failRate >= 0.25 && stats.total >= 4) {
-    items.push({
-      title: 'Elevated compliance risk',
-      detail: `${stats.failed} failed inspections out of ${stats.total} records (${Math.round(failRate * 100)}%) may signal stricter enforcement or operational complexity.`,
-    })
+  if (positive.length === 0 && insights.categories.length > 0) {
+    const strongest = [...insights.categories].sort((a, b) => b.score - a.score)[0]
+    return [{
+      title: CATEGORY_TITLES[strongest.id] ?? strongest.name,
+      detail: `${strongest.claim} (Business Intelligence Score: ${strongest.score}/100).`,
+    }]
   }
 
-  if (data.license_count >= 20) {
-    items.push({
-      title: 'High local competition',
-      detail: `${data.license_count} active business licenses in the area indicate a crowded market and a higher differentiation burden.`,
-    })
+  if (positive.length === 0) {
+    return [{
+      title: 'Limited favorable evidence',
+      detail: 'Not enough scored categories show a strong upside signal yet; collect more ground-truth data before scaling.',
+    }]
   }
 
-  if (congestedCount >= 2) {
-    items.push({
-      title: 'Traffic friction',
-      detail: `${congestedCount} nearby heavily congested zones can affect delivery reliability and customer convenience.`,
-    })
+  return positive.slice(0, 2)
+}
+
+function buildRisks(data: NeighborhoodData | null, profile: UserProfile): Signal[] {
+  if (!data) return []
+
+  const insights = computeInsights(data, profile, 'conservative')
+  const scoreDrivenRisks = insights.categories
+    .filter(cat => cat.signal === 'negative' || cat.score < 40)
+    .sort((a, b) => a.score - b.score)
+    .map<ScoredSignal>((cat) => ({
+      priority: 100 - cat.score,
+      title: CATEGORY_TITLES[cat.id] ?? cat.name,
+      detail: `${cat.claim} (Business Intelligence Score: ${cat.score}/100).`,
+    }))
+
+  const missingDataRisks = CRITICAL_MISSING_DATA_CHECKS
+    .filter(check => check.isMissing(data))
+    .map<ScoredSignal>((check) => ({
+      priority: 90,
+      title: check.title,
+      detail: check.detail,
+    }))
+
+  const combined = [...scoreDrivenRisks, ...missingDataRisks]
+    .sort((a, b) => b.priority - a.priority)
+
+  if (combined.length === 0) {
+    const weakerSignals = insights.categories
+      .filter(cat => cat.signal === 'neutral')
+      .sort((a, b) => a.score - b.score)
+      .slice(0, 1)
+      .map<ScoredSignal>((cat) => ({
+        priority: 45,
+        title: `${CATEGORY_TITLES[cat.id] ?? cat.name} requires validation`,
+        detail: `${cat.claim} (Business Intelligence Score: ${cat.score}/100).`,
+      }))
+
+    if (weakerSignals.length > 0) return weakerSignals
+
+    return [{
+      title: 'No dominant risk detected',
+      detail: 'No high-severity downside signal is currently dominant, but continue monitoring for data drift and execution risk.',
+    }]
   }
 
-  if (avgRating > 0 && avgRating < 3.8) {
-    items.push({
-      title: 'Mixed consumer sentiment',
-      detail: `Average local rating is ${avgRating.toFixed(1)}/5, suggesting quality expectations may be difficult to exceed consistently.`,
-    })
-  }
-
-  if (items.length === 0) {
-    items.push({
-      title: 'No dominant red flag detected',
-      detail: 'Current signals do not show an extreme downside driver, but category-specific diligence is still recommended.',
-    })
-  }
-
-  return items.slice(0, 2)
+  return combined.slice(0, 2)
 }
 
 function buildSummary(profile: UserProfile, data: NeighborhoodData | null, riskScore: RiskScore | null): string {
@@ -151,8 +176,8 @@ function safeNumber(value: number | undefined): string {
 }
 
 export default function LocationReportPanel({ profile, neighborhoodData, riskScore, loading, agentInfo }: Props) {
-  const advantages = buildAdvantages(neighborhoodData)
-  const risks = buildRisks(neighborhoodData)
+  const advantages = buildAdvantages(neighborhoodData, profile)
+  const risks = buildRisks(neighborhoodData, profile)
   const summary = buildSummary(profile, neighborhoodData, riskScore)
 
   const handleDownloadPdf = () => {
@@ -342,11 +367,6 @@ export default function LocationReportPanel({ profile, neighborhoodData, riskSco
                   </div>
                 ))}
               </div>
-            </div>
-
-            <div className="border border-white/[0.08] bg-black/20 p-3">
-              <p className="text-[10px] font-mono uppercase tracking-wider text-white/35 mb-2">Brief summary</p>
-              <p className="text-[11px] text-white/75 leading-relaxed">{summary}</p>
             </div>
           </>
         )}
