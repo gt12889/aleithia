@@ -4,6 +4,9 @@ import { MemoryGraph, injectStyles } from '@supermemory/memory-graph'
 import '@supermemory/memory-graph/styles.css'
 import type { DocumentWithMemories } from '@supermemory/memory-graph'
 import { api } from '../api.ts'
+
+// Documents must satisfy index signature for internal graph usage
+type DocumentForGraph = DocumentWithMemories & Record<string, unknown>
 import memGraphImg from './mem-grap.png'
 
 injectStyles()
@@ -22,7 +25,7 @@ function normalizeEntries(docId: string, entries: Record<string, unknown>[]): Do
   })) as DocumentWithMemories['memoryEntries']
 }
 
-function normalizeDocs(raw: Record<string, unknown>[]): DocumentWithMemories[] {
+function normalizeDocs(raw: Record<string, unknown>[]): DocumentForGraph[] {
   return raw.map((doc) => {
     const docId = String(doc.id ?? doc.customId ?? `doc-${Math.random().toString(36).slice(2)}`)
     const createdAt = typeof doc.createdAt === 'string' ? doc.createdAt : new Date().toISOString()
@@ -50,13 +53,13 @@ function normalizeDocs(raw: Record<string, unknown>[]): DocumentWithMemories[] {
       status: (doc.status ?? 'done') as DocumentWithMemories['status'],
       createdAt,
       updatedAt,
-    } as DocumentWithMemories
+    } as DocumentForGraph
   })
 }
 
 export default function MemGraph() {
   const navigate = useNavigate()
-  const [documents, setDocuments] = useState<DocumentWithMemories[]>([])
+  const [documents, setDocuments] = useState<DocumentForGraph[]>([])
   const [isLoading, setIsLoading] = useState(true)
   const [isLoadingMore, setIsLoadingMore] = useState(false)
   const [error, setError] = useState<Error | null>(null)

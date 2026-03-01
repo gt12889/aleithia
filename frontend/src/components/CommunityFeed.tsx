@@ -50,7 +50,8 @@ interface Props {
 }
 
 export default function CommunityFeed({ reddit, tiktok }: Props) {
-  const hasContent = reddit.length > 0 || tiktok.length > 0
+  const displayedTikTok = tiktok.slice(0, 5)
+  const hasContent = reddit.length > 0 || displayedTikTok.length > 0
 
   if (!hasContent) {
     return (
@@ -116,9 +117,14 @@ export default function CommunityFeed({ reddit, tiktok }: Props) {
         <div className="space-y-2">
           <div className="flex items-center justify-between px-1">
             <h3 className="text-[10px] font-mono font-medium uppercase tracking-wider text-white/30">TikTok</h3>
-            <span className="text-[10px] font-mono text-white/15">{tiktok.length} videos</span>
+            <span className="text-[10px] font-mono text-white/15">{displayedTikTok.length} videos</span>
           </div>
-          {tiktok.map((video) => {
+          {displayedTikTok.length === 0 && (
+            <div className="border border-white/[0.06] bg-white/[0.01] p-4 text-[10px] font-mono uppercase tracking-wider text-white/25">
+              No TikTok videos for this profile yet
+            </div>
+          )}
+          {displayedTikTok.map((video) => {
             const creator = (video.metadata?.creator as string) || ''
             const query = (video.metadata?.search_query as string) || ''
             const views = parseViewCount((video.metadata?.views as string) || '')

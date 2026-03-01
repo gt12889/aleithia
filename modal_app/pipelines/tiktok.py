@@ -54,6 +54,10 @@ CHICAGO_SEARCH_QUERIES = [
 MAX_VIDEOS_PER_QUERY = int(os.environ.get("MAX_VIDEOS_PER_QUERY", "5"))
 PROFILE_CITY_QUERY_LIMIT = 5
 PROFILE_LOCAL_QUERY_LIMIT = 2
+KERNEL_CREATE_MAX_ATTEMPTS = int(os.environ.get("TIKTOK_KERNEL_CREATE_MAX_ATTEMPTS", "3"))
+CDP_CONNECT_MAX_ATTEMPTS = int(os.environ.get("TIKTOK_CDP_CONNECT_MAX_ATTEMPTS", "3"))
+KERNEL_DELETE_MAX_ATTEMPTS = int(os.environ.get("TIKTOK_KERNEL_DELETE_MAX_ATTEMPTS", "3"))
+TIKTOK_QUERY_CONCURRENCY = max(1, int(os.environ.get("TIKTOK_QUERY_CONCURRENCY", "1")))
 
 
 def sanitize_query_term(value: str) -> str:
@@ -207,6 +211,90 @@ async def _wait_for_video_links(page, timeout_ms: int = 12_000) -> bool:
     return False
 
 
+def _is_retryable_kernel_create_error(exc: Exception) -> bool:
+    text = str(exc).lower()
+    markers = (
+        "org_limit_exceeded",
+        "rate_limit_exceeded",
+        "timeout",
+        "temporar",
+        "429",
+    )
+    return any(m in text for m in markers)
+
+
+def _is_retryable_cdp_connect_error(exc: Exception) -> bool:
+    text = str(exc).lower()
+    markers = (
+        "econnrefused",
+        "etimedout",
+        "timed out",
+        "websocket error",
+        "code=1006",
+        "connection reset",
+    )
+    return any(m in text for m in markers)
+
+
+def _is_retryable_kernel_delete_error(exc: Exception) -> bool:
+    text = str(exc).lower()
+    markers = (
+        "timeout",
+        "temporar",
+        "429",
+        "connection reset",
+        "econnrefused",
+        "etimedout",
+    )
+    return any(m in text for m in markers)
+
+
+def _kernel_session_id(kernel_browser: Any) -> str:
+    """Extract the Kernel browser session identifier across SDK shapes."""
+    for attr in ("session_id", "id"):
+        value = getattr(kernel_browser, attr, "")
+        if value:
+            return str(value)
+    return ""
+
+
+async def _delete_kernel_session_with_retries(k: Any, session_id: str, search_query: str) -> None:
+    """Best-effort Kernel session deletion with bounded retries."""
+    for attempt in range(1, KERNEL_DELETE_MAX_ATTEMPTS + 1):
+        try:
+            k.browsers.delete_by_id(session_id)
+            if attempt > 1:
+                logger.info(
+                    "Kernel session cleanup recovered for query '%s' (attempt %d/%d): %s",
+                    search_query,
+                    attempt,
+                    KERNEL_DELETE_MAX_ATTEMPTS,
+                    session_id,
+                )
+            return
+        except Exception as exc:
+            if attempt >= KERNEL_DELETE_MAX_ATTEMPTS or not _is_retryable_kernel_delete_error(exc):
+                logger.warning(
+                    "Failed to delete Kernel session for query '%s' after %d attempts (%s): %s",
+                    search_query,
+                    attempt,
+                    session_id,
+                    exc,
+                )
+                return
+            delay_s = min(1.0 * attempt, 4.0)
+            logger.warning(
+                "Kernel session delete failed for query '%s' (attempt %d/%d, %s): %s; retrying in %.1fs",
+                search_query,
+                attempt,
+                KERNEL_DELETE_MAX_ATTEMPTS,
+                session_id,
+                exc,
+                delay_s,
+            )
+            await asyncio.sleep(delay_s)
+
+
 async def _scrape_async(search_query: str, max_videos: int) -> list[dict]:
     """Scrape TikTok search results using Kernel cloud browser + Playwright."""
     from kernel import Kernel
@@ -218,19 +306,91 @@ async def _scrape_async(search_query: str, max_videos: int) -> list[dict]:
         return []
 
     k = Kernel(api_key=kernel_api_key)
+    kernel_browser = None
+    kernel_session_id = ""
+    browser = None
     try:
-        kernel_browser = k.browsers.create()
-    except Exception as exc:
-        logger.error("Failed to create Kernel browser session: %s", exc)
-        return []
+        for attempt in range(1, KERNEL_CREATE_MAX_ATTEMPTS + 1):
+            try:
+                kernel_browser = k.browsers.create()
+                kernel_session_id = _kernel_session_id(kernel_browser)
+                break
+            except Exception as exc:
+                if attempt >= KERNEL_CREATE_MAX_ATTEMPTS or not _is_retryable_kernel_create_error(exc):
+                    logger.error("Failed to create Kernel browser session: %s", exc)
+                    return []
+                delay_s = min(2.0 * attempt, 6.0)
+                logger.warning(
+                    "Kernel browser session create failed (attempt %d/%d): %s; retrying in %.1fs",
+                    attempt,
+                    KERNEL_CREATE_MAX_ATTEMPTS,
+                    exc,
+                    delay_s,
+                )
+                await asyncio.sleep(delay_s)
 
-    async with async_playwright() as pw:
-        browser = await pw.chromium.connect_over_cdp(kernel_browser.cdp_ws_url)
-        context = browser.contexts[0] if browser.contexts else await browser.new_context()
-        await _apply_tiktok_cookie_header(context)
-        page = context.pages[0] if context.pages else await context.new_page()
+        if not kernel_browser:
+            logger.error("Failed to create Kernel browser session: unknown error")
+            return []
 
-        try:
+        async with async_playwright() as pw:
+            for attempt in range(1, CDP_CONNECT_MAX_ATTEMPTS + 1):
+                if kernel_browser is None:
+                    try:
+                        kernel_browser = k.browsers.create()
+                        kernel_session_id = _kernel_session_id(kernel_browser)
+                    except Exception as recreate_exc:
+                        if attempt >= CDP_CONNECT_MAX_ATTEMPTS:
+                            raise
+                        delay_s = min(1.5 * attempt, 5.0)
+                        logger.warning(
+                            "Kernel session recreate failed for query '%s' (attempt %d/%d): %s; retrying in %.1fs",
+                            search_query,
+                            attempt,
+                            CDP_CONNECT_MAX_ATTEMPTS,
+                            recreate_exc,
+                            delay_s,
+                        )
+                        await asyncio.sleep(delay_s)
+                        continue
+                try:
+                    browser = await pw.chromium.connect_over_cdp(kernel_browser.cdp_ws_url)
+                    break
+                except Exception as exc:
+                    if attempt >= CDP_CONNECT_MAX_ATTEMPTS or not _is_retryable_cdp_connect_error(exc):
+                        raise
+                    delay_s = min(1.5 * attempt, 5.0)
+                    logger.warning(
+                        "CDP connect failed for query '%s' (attempt %d/%d): %s; retrying in %.1fs",
+                        search_query,
+                        attempt,
+                        CDP_CONNECT_MAX_ATTEMPTS,
+                        exc,
+                        delay_s,
+                    )
+                    if kernel_session_id:
+                        await _delete_kernel_session_with_retries(k, kernel_session_id, search_query)
+                        kernel_session_id = ""
+                    kernel_browser = None
+                    try:
+                        kernel_browser = k.browsers.create()
+                        kernel_session_id = _kernel_session_id(kernel_browser)
+                    except Exception as recreate_exc:
+                        logger.warning(
+                            "Kernel session recreate failed for query '%s' during CDP retry: %s",
+                            search_query,
+                            recreate_exc,
+                        )
+                    await asyncio.sleep(delay_s)
+
+            if browser is None:
+                logger.error("Scrape failed for query '%s': browser unavailable after retries", search_query)
+                return []
+
+            context = browser.contexts[0] if browser.contexts else await browser.new_context()
+            cookies_loaded = await _apply_tiktok_cookie_header(context)
+            page = context.pages[0] if context.pages else await context.new_page()
+
             encoded_query = quote_plus(search_query)
             candidate_urls = [
                 f"https://www.tiktok.com/search/video?q={encoded_query}",
@@ -257,6 +417,12 @@ async def _scrape_async(search_query: str, max_videos: int) -> list[dict]:
                     break
 
             if not links_ready:
+                if not cookies_loaded:
+                    logger.warning(
+                        "TikTok scrape for query '%s' running without TIKTOK_COOKIE_HEADER; "
+                        "anonymous sessions are often login-gated.",
+                        search_query,
+                    )
                 if login_gate_detected:
                     logger.error(
                         "Blocked by TikTok login gate for query '%s'; "
@@ -336,15 +502,25 @@ async def _scrape_async(search_query: str, max_videos: int) -> list[dict]:
 
             return videos
 
-        except Exception as exc:
-            logger.error("Scrape failed for query '%s': %s", search_query, exc)
-            return []
-        finally:
-            await browser.close()
+    except Exception as exc:
+        logger.error("Scrape failed for query '%s': %s", search_query, exc)
+        return []
+    finally:
+        if browser is not None:
             try:
-                k.browsers.delete_by_id(kernel_browser.session_id)
+                await browser.close()
             except Exception:
                 pass
+        if kernel_browser is not None:
+            if not kernel_session_id:
+                kernel_session_id = _kernel_session_id(kernel_browser)
+            if kernel_session_id:
+                await _delete_kernel_session_with_retries(k, kernel_session_id, search_query)
+            else:
+                logger.warning(
+                    "Kernel browser session id missing during cleanup for query '%s'",
+                    search_query,
+                )
 
 
 @app.function(
@@ -506,6 +682,61 @@ def _normalize_query_specs(
     ]
 
 
+def _derive_business_fallback_terms(business_type: str) -> list[str]:
+    """Return narrower fallback business terms for broad combined labels."""
+    biz = sanitize_query_term(business_type)
+    terms: list[str] = []
+    if "salon" in biz and ("barber" in biz or "barbershop" in biz):
+        terms.extend(["salon", "barbershop"])
+
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for term in terms:
+        norm = sanitize_query_term(term)
+        if norm and norm not in seen:
+            seen.add(norm)
+            deduped.append(norm)
+    return deduped
+
+
+def _build_fallback_query_specs(spec: dict[str, Any]) -> list[dict[str, str]]:
+    """Build progressive fallback query variants when the primary query is empty."""
+    primary_query = _clean_text(str(spec.get("query", "")))
+    scope = _clean_text(str(spec.get("scope", "city"))).lower() or "city"
+    biz = sanitize_query_term(str(spec.get("business_type", "")))
+    neighborhood_raw = _clean_text(str(spec.get("neighborhood", "")))
+    neighborhood_norm = sanitize_query_term(neighborhood_raw)
+
+    fallbacks: list[dict[str, str]] = []
+    seen_queries: set[str] = {primary_query.lower()}
+
+    def add(query: str, query_scope: str, query_neighborhood: str) -> None:
+        q = _clean_text(query)
+        key = q.lower()
+        if not q or key in seen_queries:
+            return
+        seen_queries.add(key)
+        fallbacks.append(
+            {
+                "query": q,
+                "scope": query_scope,
+                "query_neighborhood": query_neighborhood,
+            }
+        )
+
+    # First fallback for local queries: drop neighborhood and retry city-wide.
+    if scope == "local" and biz:
+        add(f"{biz} chicago", "city", "")
+
+    # Domain-specific split fallback for broad combined business labels.
+    for term in _derive_business_fallback_terms(biz):
+        if scope == "local" and neighborhood_norm:
+            add(f"{term} {neighborhood_norm} chicago", "local", neighborhood_raw)
+        add(f"{term} chicago", "city", "")
+
+    return fallbacks
+
+
 def _extract_creator_from_url(video_url: str) -> str:
     """Extract TikTok creator handle from canonical video URL."""
     match = _CREATOR_FROM_URL_RE.search(video_url or "")
@@ -589,16 +820,57 @@ def ingest_tiktok(
     all_videos: list[dict] = []
     seen_urls: set[str] = set()
 
-    for spec, result in zip(specs, scrape_tiktok.starmap(scrape_args)):
-        for v in (result or []):
-            url = v.get("video_url", "")
-            if url and url not in seen_urls:
-                seen_urls.add(url)
-                v["search_query"] = spec["query"]
-                v["query_scope"] = spec.get("scope", "city")
-                v["query_business_type"] = spec.get("business_type", "")
-                v["query_neighborhood"] = spec.get("neighborhood", "")
-                all_videos.append(v)
+    for start in range(0, len(scrape_args), TIKTOK_QUERY_CONCURRENCY):
+        end = start + TIKTOK_QUERY_CONCURRENCY
+        batch_specs = specs[start:end]
+        batch_args = scrape_args[start:end]
+        for spec, result in zip(batch_specs, scrape_tiktok.starmap(batch_args)):
+            used_query = spec["query"]
+            used_scope = spec.get("scope", "city")
+            used_neighborhood = spec.get("neighborhood", "")
+            resolved = list(result or [])
+
+            if not resolved:
+                for fallback in _build_fallback_query_specs(spec):
+                    fallback_query = fallback["query"]
+                    fallback_scope = fallback["scope"]
+                    fallback_neighborhood = fallback["query_neighborhood"]
+                    try:
+                        fallback_result = scrape_tiktok.remote(fallback_query, spec["limit"]) or []
+                    except Exception as exc:
+                        logger.warning(
+                            "TikTok fallback query errored for '%s' using '%s': %s",
+                            spec["query"],
+                            fallback_query,
+                            exc,
+                        )
+                        continue
+                    if fallback_result:
+                        resolved = list(fallback_result)
+                        used_query = fallback_query
+                        used_scope = fallback_scope
+                        used_neighborhood = fallback_neighborhood
+                        logger.info(
+                            "TikTok fallback query succeeded for '%s' using '%s'",
+                            spec["query"],
+                            fallback_query,
+                        )
+                        break
+                    logger.info(
+                        "TikTok fallback query returned no videos for '%s' using '%s'",
+                        spec["query"],
+                        fallback_query,
+                    )
+
+            for v in resolved:
+                url = v.get("video_url", "")
+                if url and url not in seen_urls:
+                    seen_urls.add(url)
+                    v["search_query"] = used_query
+                    v["query_scope"] = used_scope
+                    v["query_business_type"] = spec.get("business_type", "")
+                    v["query_neighborhood"] = used_neighborhood
+                    all_videos.append(v)
 
     logger.info("Scraped %d unique videos from %d queries", len(all_videos), len(specs))
 

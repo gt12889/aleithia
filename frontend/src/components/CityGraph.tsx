@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import ForceGraph2D from 'react-force-graph-2d'
-import { fetchCityGraph, type CityGraphData, type GraphNode } from '../api.ts'
+import { fetchCityGraph, fetchNeighborhoodGraph, type CityGraphData, type GraphNode } from '../api.ts'
 
 const NODE_COLORS: Record<string, string> = {
   neighborhood: '#3b82f6',
@@ -15,11 +15,24 @@ interface Props {
   interactive?: boolean
 }
 
+interface Viewport {
+  x: number
+  y: number
+  width: number
+  height: number
+}
+
+const MIN_ZOOM = 0.6
+const MAX_ZOOM = 6
+const ZOOM_STEP = 1.15
+
 export default function CityGraph({ activeNeighborhood, interactive = false }: Props) {
   const [graphData, setGraphData] = useState<CityGraphData | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [viewMode, setViewMode] = useState<'neighborhood' | 'full'>(activeNeighborhood ? 'neighborhood' : 'full')
   const [selectedNode, setSelectedNode] = useState<GraphNode | null>(null)
+  const [zoomLevel, setZoomLevel] = useState(1)
   const [filters, setFilters] = useState<Record<string, boolean>>({
     neighborhood: true,
     regulation: true,
@@ -30,6 +43,11 @@ export default function CityGraph({ activeNeighborhood, interactive = false }: P
   const containerRef = useRef<HTMLDivElement>(null)
   const fgRef = useRef<{ zoom: (k: number, durationMs?: number) => void; zoomToFit: (durationMs?: number, padding?: number) => void } | undefined>(undefined)
   const [dimensions, setDimensions] = useState({ width: 800, height: 500 })
+  const baseViewportRef = useRef<Viewport | null>(null)
+  const viewportRef = useRef<Viewport | null>(null)
+  const panStateRef = useRef({ active: false, lastX: 0, lastY: 0, moved: false })
+  const suppressNodeClickUntilRef = useRef(0)
+  const requestVersionRef = useRef(0)
 
   useEffect(() => {
     if (!interactive || !containerRef.current) return
@@ -45,19 +63,146 @@ export default function CityGraph({ activeNeighborhood, interactive = false }: P
   }, [interactive])
 
   const loadGraph = useCallback(async () => {
+    const requestVersion = ++requestVersionRef.current
     setLoading(true)
     setError(null)
     try {
-      const data = await fetchCityGraph()
+      const data = viewMode === 'neighborhood' && activeNeighborhood
+        ? await fetchNeighborhoodGraph(activeNeighborhood)
+        : await fetchCityGraph()
+      if (requestVersion !== requestVersionRef.current) return
       setGraphData(data)
+      setSelectedNode(null)
     } catch (e) {
+      if (requestVersion !== requestVersionRef.current) return
       setError(e instanceof Error ? e.message : 'Failed to load graph')
     } finally {
-      setLoading(false)
+      if (requestVersion === requestVersionRef.current) {
+        setLoading(false)
+      }
+    }
+  }, [viewMode, activeNeighborhood])
+
+  const applyViewport = useCallback((next: Viewport) => {
+    if (!svgRef.current) return
+    svgRef.current.setAttribute('viewBox', `${next.x} ${next.y} ${next.width} ${next.height}`)
+    viewportRef.current = next
+
+    const base = baseViewportRef.current
+    if (base) {
+      const zoom = base.width / next.width
+      setZoomLevel(Number.isFinite(zoom) ? zoom : 1)
     }
   }, [])
 
+  const resetViewport = useCallback(() => {
+    const base = baseViewportRef.current
+    if (!base) return
+    applyViewport({ ...base })
+  }, [applyViewport])
+
+  const zoomViewport = useCallback((zoomIn: boolean, anchor?: { x: number; y: number }) => {
+    const svg = svgRef.current
+    const base = baseViewportRef.current
+    const current = viewportRef.current
+    if (!svg || !base || !current) return
+
+    const rect = svg.getBoundingClientRect()
+    if (!rect.width || !rect.height) return
+
+    const factor = zoomIn ? 1 / ZOOM_STEP : ZOOM_STEP
+    const minWidth = base.width / MAX_ZOOM
+    const maxWidth = base.width / MIN_ZOOM
+    const nextWidth = Math.min(maxWidth, Math.max(minWidth, current.width * factor))
+    const nextHeight = current.height * (nextWidth / current.width)
+
+    const anchorX = anchor ? anchor.x - rect.left : rect.width / 2
+    const anchorY = anchor ? anchor.y - rect.top : rect.height / 2
+
+    const nextX = current.x + (anchorX / rect.width) * (current.width - nextWidth)
+    const nextY = current.y + (anchorY / rect.height) * (current.height - nextHeight)
+
+    applyViewport({ x: nextX, y: nextY, width: nextWidth, height: nextHeight })
+  }, [applyViewport])
+
   useEffect(() => { loadGraph() }, [loadGraph])
+  useEffect(() => {
+    if (!activeNeighborhood && viewMode === 'neighborhood') {
+      setViewMode('full')
+    }
+  }, [activeNeighborhood, viewMode])
+
+  useEffect(() => {
+    if (interactive) return
+    const svg = svgRef.current
+    if (!svg) return
+
+    const onWheel = (event: WheelEvent) => {
+      if (!baseViewportRef.current || !viewportRef.current) return
+      event.preventDefault()
+      zoomViewport(event.deltaY < 0, { x: event.clientX, y: event.clientY })
+    }
+
+    const onPointerDown = (event: PointerEvent) => {
+      if (event.button !== 0 || !viewportRef.current) return
+      const target = event.target
+      if (target instanceof Element && target.closest('g[data-city-graph-node="true"]')) return
+
+      panStateRef.current = { active: true, lastX: event.clientX, lastY: event.clientY, moved: false }
+      svg.style.cursor = 'grabbing'
+      svg.setPointerCapture(event.pointerId)
+    }
+
+    const onPointerMove = (event: PointerEvent) => {
+      if (!panStateRef.current.active || !viewportRef.current) return
+      const rect = svg.getBoundingClientRect()
+      if (!rect.width || !rect.height) return
+
+      const dx = event.clientX - panStateRef.current.lastX
+      const dy = event.clientY - panStateRef.current.lastY
+      if (Math.abs(dx) > 2 || Math.abs(dy) > 2) {
+        panStateRef.current.moved = true
+      }
+
+      const current = viewportRef.current
+      if (!current) return
+      const next = {
+        ...current,
+        x: current.x - (dx / rect.width) * current.width,
+        y: current.y - (dy / rect.height) * current.height,
+      }
+
+      applyViewport(next)
+      panStateRef.current.lastX = event.clientX
+      panStateRef.current.lastY = event.clientY
+    }
+
+    const onPointerUp = (event: PointerEvent) => {
+      if (!panStateRef.current.active) return
+      if (panStateRef.current.moved) {
+        suppressNodeClickUntilRef.current = Date.now() + 120
+      }
+      panStateRef.current.active = false
+      if (svg.hasPointerCapture(event.pointerId)) {
+        svg.releasePointerCapture(event.pointerId)
+      }
+      svg.style.cursor = 'grab'
+    }
+
+    svg.addEventListener('wheel', onWheel, { passive: false })
+    svg.addEventListener('pointerdown', onPointerDown)
+    svg.addEventListener('pointermove', onPointerMove)
+    svg.addEventListener('pointerup', onPointerUp)
+    svg.addEventListener('pointercancel', onPointerUp)
+
+    return () => {
+      svg.removeEventListener('wheel', onWheel)
+      svg.removeEventListener('pointerdown', onPointerDown)
+      svg.removeEventListener('pointermove', onPointerMove)
+      svg.removeEventListener('pointerup', onPointerUp)
+      svg.removeEventListener('pointercancel', onPointerUp)
+    }
+  }, [interactive, applyViewport, zoomViewport])
 
   // Run force simulation and render to SVG (only when not interactive)
   useEffect(() => {
@@ -137,6 +282,8 @@ export default function CityGraph({ activeNeighborhood, interactive = false }: P
 
     // Render to SVG
     while (svg.firstChild) svg.removeChild(svg.firstChild)
+    const viewportLayer = document.createElementNS('http://www.w3.org/2000/svg', 'g')
+    svg.appendChild(viewportLayer)
 
     // Draw edges
     for (const edge of filteredEdges) {
@@ -150,7 +297,7 @@ export default function CityGraph({ activeNeighborhood, interactive = false }: P
       line.setAttribute('y2', String(b.y))
       line.setAttribute('stroke', 'rgba(255,255,255,0.08)')
       line.setAttribute('stroke-width', String(Math.max(0.5, edge.weight * 2)))
-      svg.appendChild(line)
+      viewportLayer.appendChild(line)
     }
 
     // Draw nodes
@@ -160,8 +307,12 @@ export default function CityGraph({ activeNeighborhood, interactive = false }: P
 
       const g = document.createElementNS('http://www.w3.org/2000/svg', 'g')
       g.setAttribute('transform', `translate(${pos.x},${pos.y})`)
+      g.setAttribute('data-city-graph-node', 'true')
       g.style.cursor = 'pointer'
-      g.addEventListener('click', () => setSelectedNode(node))
+      g.addEventListener('click', () => {
+        if (Date.now() < suppressNodeClickUntilRef.current) return
+        setSelectedNode(node)
+      })
 
       const isActive = activeNeighborhood && node.id === `nb:${activeNeighborhood}`
       const radius = Math.max(4, (node.size || 10) / 4)
@@ -188,9 +339,13 @@ export default function CityGraph({ activeNeighborhood, interactive = false }: P
         g.appendChild(text)
       }
 
-      svg.appendChild(g)
+      viewportLayer.appendChild(g)
     }
-  }, [interactive, graphData, filters, activeNeighborhood])
+
+    const defaultViewport = { x: 0, y: 0, width, height }
+    baseViewportRef.current = defaultViewport
+    applyViewport(defaultViewport)
+  }, [interactive, graphData, filters, activeNeighborhood, applyViewport])
 
   // Filtered graph for ForceGraph2D
   const interactiveGraphData = graphData
@@ -212,6 +367,28 @@ export default function CityGraph({ activeNeighborhood, interactive = false }: P
       <div className="px-4 py-3 border-b border-white/[0.06] flex items-center justify-between">
         <h3 className="text-[10px] font-mono uppercase tracking-wider text-white/40">Knowledge Graph</h3>
         <div className="flex items-center gap-3">
+          <div className="flex gap-0 border border-white/[0.08] rounded overflow-hidden">
+            {(['neighborhood', 'full'] as const).map((mode) => {
+              const disabled = mode === 'neighborhood' && !activeNeighborhood
+              return (
+                <button
+                  key={mode}
+                  type="button"
+                  onClick={() => setViewMode(mode)}
+                  disabled={disabled}
+                  className={`px-3 py-1 text-[10px] font-mono uppercase tracking-wider transition-colors ${
+                    viewMode === mode
+                      ? 'bg-white/[0.06] text-white'
+                      : disabled
+                        ? 'text-white/15 cursor-not-allowed'
+                        : 'text-white/30 hover:text-white/50 cursor-pointer'
+                  }`}
+                >
+                  {mode === 'neighborhood' ? '1-Hop' : 'Full'}
+                </button>
+              )
+            })}
+          </div>
           {graphData?.stats && (
             <span className="text-[10px] font-mono text-white/20">
               {graphData.stats.total_nodes} nodes &middot; {graphData.stats.total_edges} edges
@@ -243,6 +420,44 @@ export default function CityGraph({ activeNeighborhood, interactive = false }: P
 
       {/* Graph canvas */}
       <div ref={containerRef} className="relative" style={{ height: 500 }}>
+        {!interactive && (
+          <div className="absolute top-3 right-3 z-10 flex items-center gap-2 pointer-events-none">
+            <span className="hidden sm:inline text-[10px] font-mono text-white/25">
+              scroll zoom · drag pan
+            </span>
+            <div className="flex items-center gap-1 pointer-events-auto">
+              <button
+                type="button"
+                onClick={() => zoomViewport(false)}
+                className="w-6 h-6 border border-white/[0.12] bg-[#06080d]/90 text-white/60 hover:text-white hover:border-white/35 transition-colors cursor-pointer"
+                aria-label="Zoom out"
+                disabled={!graphData || loading}
+              >
+                -
+              </button>
+              <button
+                type="button"
+                onClick={() => zoomViewport(true)}
+                className="w-6 h-6 border border-white/[0.12] bg-[#06080d]/90 text-white/60 hover:text-white hover:border-white/35 transition-colors cursor-pointer"
+                aria-label="Zoom in"
+                disabled={!graphData || loading}
+              >
+                +
+              </button>
+              <button
+                type="button"
+                onClick={resetViewport}
+                className="px-2 h-6 border border-white/[0.12] bg-[#06080d]/90 text-[10px] font-mono text-white/50 hover:text-white hover:border-white/35 transition-colors cursor-pointer"
+                disabled={!graphData || loading}
+              >
+                reset
+              </button>
+              <span className="text-[10px] font-mono text-white/25 min-w-[40px] text-right">
+                {zoomLevel.toFixed(1)}x
+              </span>
+            </div>
+          </div>
+        )}
         {loading && (
           <div className="absolute inset-0 flex items-center justify-center z-10">
             <div className="w-5 h-5 border border-white/20 border-t-white/60 rounded-full animate-spin" />
@@ -278,7 +493,7 @@ export default function CityGraph({ activeNeighborhood, interactive = false }: P
             }}
           />
         ) : (
-          <svg ref={svgRef} width="100%" height="100%" className="bg-transparent" />
+          <svg ref={svgRef} width="100%" height="100%" className="bg-transparent touch-none cursor-grab" />
         )}
       </div>
 

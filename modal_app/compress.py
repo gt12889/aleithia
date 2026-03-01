@@ -146,14 +146,15 @@ def _build_geo_metrics(summaries: dict[str, DatasetSummary]) -> dict:
             neighborhood_data[hood]["business_activity"] += min(count * 2.0, 100.0)
 
     # Aggregate from enriched documents — classification + sentiment
+    # Per-neighborhood accumulators for averaging
+    sentiment_totals: dict[str, list[float]] = defaultdict(list)
+    regulatory_counts: dict[str, int] = defaultdict(int)
+    business_counts: dict[str, int] = defaultdict(int)
+    safety_counts: dict[str, int] = defaultdict(int)
+    enriched_count = 0
+
     enriched_dir = Path(PROCESSED_DATA_PATH) / "enriched"
     if enriched_dir.exists():
-        # Per-neighborhood accumulators for averaging
-        sentiment_totals: dict[str, list[float]] = defaultdict(list)
-        regulatory_counts: dict[str, int] = defaultdict(int)
-        business_counts: dict[str, int] = defaultdict(int)
-        safety_counts: dict[str, int] = defaultdict(int)
-
         for jf in enriched_dir.rglob("*.json"):
             try:
                 doc = json.loads(jf.read_text())
@@ -169,6 +170,8 @@ def _build_geo_metrics(summaries: dict[str, DatasetSummary]) -> dict:
                 hood = COMMUNITY_AREA_MAP.get(area_num, str(area_num))
             except (ValueError, TypeError):
                 pass
+
+            enriched_count += 1
 
             # Classification — count by top label
             classification = doc.get("classification", {})
@@ -193,33 +196,79 @@ def _build_geo_metrics(summaries: dict[str, DatasetSummary]) -> dict:
             elif slabel == "neutral":
                 sentiment_totals[hood].append(0.0)
 
-        # Apply enriched metrics to neighborhood data
-        for hood in set(regulatory_counts) | set(business_counts) | set(sentiment_totals) | set(safety_counts):
-            props = neighborhood_data[hood]
+    # Fallback: if no enriched docs, classify raw docs via keyword heuristics
+    if enriched_count == 0:
+        print("Compress [enriched]: no enriched docs found, using keyword heuristic fallback")
+        _REGULATORY_KW = {"permit", "license", "zoning", "regulation", "inspection", "ordinance", "violation", "compliance", "code", "fine"}
+        _BUSINESS_KW = {"restaurant", "store", "shop", "cafe", "bar", "business", "opening", "closing", "lease", "rent", "revenue", "commerce"}
+        _SAFETY_KW = {"crime", "theft", "shooting", "fire", "accident", "hazard", "unsafe", "emergency", "arrest", "robbery"}
+        _POSITIVE_KW = {"great", "excellent", "love", "amazing", "best", "wonderful", "fantastic", "recommend", "impressed", "perfect"}
+        _NEGATIVE_KW = {"terrible", "worst", "awful", "horrible", "disgusting", "avoid", "bad", "poor", "dirty", "rude", "complaint", "fail"}
 
-            # regulatory_density: normalized count of regulatory-classified docs
-            if hood in regulatory_counts:
-                props["regulatory_density"] = min(regulatory_counts[hood] * 3.0, 100.0)
+        for source in ["public_data", "news", "reddit", "reviews", "politics", "federal_register"]:
+            raw_dir = Path(RAW_DATA_PATH) / source
+            if not raw_dir.exists():
+                continue
+            for jf in raw_dir.rglob("*.json"):
+                try:
+                    doc = json.loads(jf.read_text())
+                except Exception:
+                    continue
+                hood = doc.get("geo", {}).get("neighborhood", "")
+                if not hood:
+                    continue
+                try:
+                    area_num = int(hood)
+                    hood = COMMUNITY_AREA_MAP.get(area_num, str(area_num))
+                except (ValueError, TypeError):
+                    pass
 
-            # business_activity: supplement with economic/business-classified docs
-            if hood in business_counts:
-                props["business_activity"] = min(
-                    props["business_activity"] + business_counts[hood] * 2.0, 100.0
-                )
+                text = (doc.get("title", "") + " " + doc.get("content", "")[:500]).lower()
+                words = set(text.split())
 
-            # avg_review_rating: average sentiment mapped to 0-5 scale
-            if hood in sentiment_totals and sentiment_totals[hood]:
-                avg_sentiment = sum(sentiment_totals[hood]) / len(sentiment_totals[hood])
-                props["avg_review_rating"] = round((avg_sentiment + 1.0) * 2.5, 2)
-                props["sentiment"] = round(avg_sentiment, 4)
+                if words & _REGULATORY_KW:
+                    regulatory_counts[hood] += 1
+                if words & _BUSINESS_KW:
+                    business_counts[hood] += 1
+                if words & _SAFETY_KW:
+                    safety_counts[hood] += 1
 
-            # risk_score: weighted combination of regulatory + safety + negative sentiment
-            reg = regulatory_counts.get(hood, 0)
-            safe = safety_counts.get(hood, 0)
-            neg_sent = sum(1 for s in sentiment_totals.get(hood, []) if s < -0.5)
-            props["risk_score"] = min((reg * 2.0 + safe * 3.0 + neg_sent * 2.5), 100.0)
+                pos = len(words & _POSITIVE_KW)
+                neg = len(words & _NEGATIVE_KW)
+                if pos > neg:
+                    sentiment_totals[hood].append(0.6)
+                elif neg > pos:
+                    sentiment_totals[hood].append(-0.6)
+                elif pos > 0 or neg > 0:
+                    sentiment_totals[hood].append(0.0)
 
-        print(f"Compress [enriched]: processed docs across {len(sentiment_totals)} neighborhoods")
+    # Apply classification + sentiment metrics to neighborhood data
+    for hood in set(regulatory_counts) | set(business_counts) | set(sentiment_totals) | set(safety_counts):
+        props = neighborhood_data[hood]
+
+        # regulatory_density: normalized count of regulatory-classified docs
+        if hood in regulatory_counts:
+            props["regulatory_density"] = min(regulatory_counts[hood] * 3.0, 100.0)
+
+        # business_activity: supplement with economic/business-classified docs
+        if hood in business_counts:
+            props["business_activity"] = min(
+                props["business_activity"] + business_counts[hood] * 2.0, 100.0
+            )
+
+        # avg_review_rating: average sentiment mapped to 0-5 scale
+        if hood in sentiment_totals and sentiment_totals[hood]:
+            avg_sentiment = sum(sentiment_totals[hood]) / len(sentiment_totals[hood])
+            props["avg_review_rating"] = round((avg_sentiment + 1.0) * 2.5, 2)
+            props["sentiment"] = round(avg_sentiment, 4)
+
+        # risk_score: weighted combination of regulatory + safety + negative sentiment
+        reg = regulatory_counts.get(hood, 0)
+        safe = safety_counts.get(hood, 0)
+        neg_sent = sum(1 for s in sentiment_totals.get(hood, []) if s < -0.5)
+        props["risk_score"] = min((reg * 2.0 + safe * 3.0 + neg_sent * 2.5), 100.0)
+
+    print(f"Compress [enriched]: processed docs across {len(sentiment_totals)} neighborhoods (enriched: {enriched_count})")
 
     # Build GeoJSON
     features = []
@@ -227,7 +276,7 @@ def _build_geo_metrics(summaries: dict[str, DatasetSummary]) -> dict:
         coords = NEIGHBORHOOD_CENTROIDS.get(hood)
         if not coords:
             continue
-        props = neighborhood_data.get(hood, {})
+        props = neighborhood_data[hood]
         props["neighborhood"] = hood
         features.append({
             "type": "Feature",

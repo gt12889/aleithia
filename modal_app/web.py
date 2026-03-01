@@ -41,12 +41,13 @@ web_app.add_middleware(
 )
 
 
-# Profile refresh throttling for background TikTok fetches.
-tiktok_refresh_dict = modal.Dict.from_name("alethia-tiktok-refresh", create_if_missing=True)
-TIKTOK_REFRESH_COOLDOWN_SECONDS = 30 * 60
-TIKTOK_PROFILE_STALE_SECONDS = 6 * 60 * 60
+# Profile refresh coordination for background TikTok fetches.
+tiktok_refresh_recent_dict = modal.Dict.from_name("alethia-tiktok-refresh-recent", create_if_missing=True)
 TIKTOK_TARGET_COUNT = 5
 TIKTOK_LOCAL_RESERVE = 2
+TIKTOK_TRIGGER_DEBOUNCE_SECONDS = 20
+_tiktok_refresh_locks: dict[str, asyncio.Lock] = {}
+_tiktok_refresh_locks_guard = asyncio.Lock()
 
 
 def _load_docs(source: str, limit: int = 200) -> list[dict]:
@@ -356,6 +357,43 @@ def _refresh_key(business_type: str, neighborhood: str) -> str:
     biz = _sanitize_business_type(business_type) or "small business"
     nb = (neighborhood or "").strip().lower()
     return f"{biz}|{nb}"
+
+
+async def _get_tiktok_refresh_lock(key: str) -> asyncio.Lock:
+    """Return a per-profile in-process lock to avoid duplicate refresh spawns."""
+    async with _tiktok_refresh_locks_guard:
+        lock = _tiktok_refresh_locks.get(key)
+        if lock is None:
+            lock = asyncio.Lock()
+            _tiktok_refresh_locks[key] = lock
+        return lock
+
+
+async def _dict_get_float_aio(d: modal.Dict, key: str, default: float = 0.0) -> float:
+    """Async-safe float lookup for modal.Dict values."""
+    try:
+        getter_aio = getattr(d.__getitem__, "aio", None)
+        if callable(getter_aio):
+            value = await getter_aio(key)
+        else:
+            value = d[key]
+    except KeyError:
+        return default
+    except Exception:
+        return default
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+async def _dict_put_value_aio(d: modal.Dict, key: str, value: float) -> None:
+    """Set modal.Dict key using async API when available, sync fallback otherwise."""
+    put_aio = getattr(getattr(d, "put", None), "aio", None)
+    if callable(put_aio):
+        await put_aio(key, value)
+    else:
+        d[key] = value
 
 
 def _is_low_quality_tiktok_doc(doc: dict) -> bool:
@@ -762,6 +800,27 @@ async def chat(request: Request):
                 span.set_attribute("chat.agents_deployed", result.get("agents_deployed", 0))
                 span.set_attribute("chat.data_points", result.get("total_data_points", 0))
 
+            # Generate follow-up suggestions via GPT-4o (non-blocking, skip on failure)
+            try:
+                from modal_app.openai_utils import openai_available, get_openai_client
+                if openai_available():
+                    oai_client = get_openai_client()
+                    suggestion_resp = await oai_client.chat.completions.create(
+                        model="gpt-4o",
+                        messages=[
+                            {"role": "system", "content": "Generate 2-3 concise follow-up questions a small business owner would ask next. Return JSON: {\"questions\": [\"...\", \"...\"]}. Questions should be specific to the business type and neighborhood context provided. Keep each under 60 characters."},
+                            {"role": "user", "content": f"User asked: {question}\nResponse summary: {full_response[:2000]}\nBusiness: {business_type}, Neighborhood: {neighborhood}"},
+                        ],
+                        max_tokens=200,
+                        temperature=0.7,
+                        response_format={"type": "json_object"},
+                    )
+                    suggestions = json.loads(suggestion_resp.choices[0].message.content or "{}").get("questions", [])[:3]
+                    if suggestions:
+                        yield f"data: {json.dumps({'type': 'suggestions', 'questions': suggestions})}\n\n"
+            except Exception:
+                pass  # Silently skip suggestions on failure
+
             yield f"data: {json.dumps({'type': 'done'})}\n\n"
 
             # Store conversation + seed profile in Supermemory (fire-and-forget)
@@ -1081,49 +1140,50 @@ async def _maybe_spawn_tiktok_profile_refresh(
     local_count: int,
     freshest_epoch: float,
 ) -> dict:
-    """Trigger non-blocking profile TikTok refresh when stale or insufficient."""
-    now_epoch = time.time()
-    stale = (now_epoch - freshest_epoch) > TIKTOK_PROFILE_STALE_SECONDS if freshest_epoch > 0 else True
-    insufficient = profile_count < TIKTOK_TARGET_COUNT or local_count < TIKTOK_LOCAL_RESERVE
+    """Trigger non-blocking profile TikTok refresh, debounced for duplicate UI bursts."""
 
     status = {
         "requested": False,
-        "reason": "fresh_and_sufficient",
+        "reason": "pending",
         "cooldown_seconds_remaining": 0,
         "profile_docs": profile_count,
         "local_docs": local_count,
     }
 
-    if not (stale or insufficient):
-        return status
-
     key = _refresh_key(business_type, neighborhood)
-    try:
-        last_epoch = float(tiktok_refresh_dict[key])
-    except KeyError:
-        last_epoch = 0.0
-    except Exception:
-        last_epoch = 0.0
+    key_lock = await _get_tiktok_refresh_lock(key)
+    async with key_lock:
+        now_epoch = time.time()
+        last_trigger_epoch = await _dict_get_float_aio(tiktok_refresh_recent_dict, key, default=0.0)
+        elapsed = now_epoch - last_trigger_epoch
+        if elapsed < TIKTOK_TRIGGER_DEBOUNCE_SECONDS:
+            status["reason"] = "debounced"
+            status["cooldown_seconds_remaining"] = int(TIKTOK_TRIGGER_DEBOUNCE_SECONDS - elapsed)
+            return status
 
-    elapsed = now_epoch - last_epoch
-    if elapsed < TIKTOK_REFRESH_COOLDOWN_SECONDS:
-        status["reason"] = "cooldown"
-        status["cooldown_seconds_remaining"] = int(TIKTOK_REFRESH_COOLDOWN_SECONDS - elapsed)
-        return status
+        await _dict_put_value_aio(tiktok_refresh_recent_dict, key, now_epoch)
+        try:
+            from modal_app.pipelines.tiktok import ingest_tiktok_for_profile
 
-    try:
-        from modal_app.pipelines.tiktok import ingest_tiktok_for_profile
-
-        ingest_tiktok_for_profile.spawn(
-            business_type=business_type or "small business",
-            neighborhood=neighborhood,
-            transcribe=False,
-        )
-        tiktok_refresh_dict[key] = now_epoch
-        status["requested"] = True
-        status["reason"] = "stale" if stale else "insufficient"
-    except Exception as exc:
-        status["reason"] = f"spawn_error:{exc}"
+            spawn_aio = getattr(ingest_tiktok_for_profile.spawn, "aio", None)
+            if callable(spawn_aio):
+                await spawn_aio(
+                    business_type=business_type or "small business",
+                    neighborhood=neighborhood,
+                    transcribe=False,
+                )
+            else:
+                ingest_tiktok_for_profile.spawn(
+                    business_type=business_type or "small business",
+                    neighborhood=neighborhood,
+                    transcribe=False,
+                )
+            status["requested"] = True
+            status["reason"] = "requested"
+        except Exception as exc:
+            # Allow immediate retry if spawn submission failed.
+            await _dict_put_value_aio(tiktok_refresh_recent_dict, key, 0.0)
+            status["reason"] = f"spawn_error:{exc}"
 
     return status
 
@@ -1310,13 +1370,24 @@ async def neighborhood(name: str, business_type: str = ""):
         tiktok_docs = _rank_tiktok_docs(all_tiktok_profile, business_type, name)
         federal_docs = _filter_politics_relevance(_filter_by_neighborhood(all_federal, name), business_type)
         profile_count, local_count, freshest_epoch = _profile_tiktok_freshness(all_tiktok_profile, business_type, name)
-        tiktok_refresh = await _maybe_spawn_tiktok_profile_refresh(
-            neighborhood=name,
-            business_type=business_type or "small business",
-            profile_count=profile_count,
-            local_count=local_count,
-            freshest_epoch=freshest_epoch,
-        )
+        try:
+            tiktok_refresh = await _maybe_spawn_tiktok_profile_refresh(
+                neighborhood=name,
+                business_type=business_type or "small business",
+                profile_count=profile_count,
+                local_count=local_count,
+                freshest_epoch=freshest_epoch,
+            )
+        except Exception as exc:
+            # Neighborhood response should still succeed even if background refresh scheduling fails.
+            print(f"tiktok_refresh_error: {exc}")
+            tiktok_refresh = {
+                "requested": False,
+                "reason": f"refresh_error:{exc}",
+                "cooldown_seconds_remaining": 0,
+                "profile_docs": profile_count,
+                "local_docs": local_count,
+            }
         # Traffic/CCTV temporarily disabled — pipelines not yet fully implemented
         traffic_docs: list[dict] = []
 
@@ -1403,13 +1474,16 @@ async def neighborhood(name: str, business_type: str = ""):
         cctv_analysis = await _load_cctv_for_neighborhood(name)
         if cctv_analysis.get("cameras"):
             cam_ids = [c["camera_id"] for c in cctv_analysis["cameras"]]
-            ts = _aggregate_timeseries_for_neighborhood(name, camera_ids=cam_ids)
+            ts = await _aggregate_timeseries_for_neighborhood(name, camera_ids=cam_ids)
             if ts.get("hours"):
                 cctv_analysis["peak_hour"] = ts["peak_hour"]
                 cctv_analysis["peak_pedestrians"] = ts["peak_pedestrians"]
 
         # CTA transit proximity score
         transit_data = _compute_transit_score(name)
+
+        # Parking analysis
+        parking_data = _load_parking_for_neighborhood(name)
 
         if span:
             span.set_attribute("output.value", json.dumps({
@@ -1438,6 +1512,7 @@ async def neighborhood(name: str, business_type: str = ""):
             "traffic": traffic_docs[:10],
             "cctv": cctv_analysis,
             "transit": transit_data,
+            "parking": parking_data,
             "inspection_stats": {
                 "total": len(inspections),
                 "failed": failed,
@@ -1767,10 +1842,14 @@ async def cctv_frame(camera_id: str):
     return Response(content=frame_bytes, media_type="image/jpeg")
 
 
-def _aggregate_timeseries_for_neighborhood(name: str, camera_ids: list[str] | None = None) -> dict:
+async def _aggregate_timeseries_for_neighborhood(name: str, camera_ids: list[str] | None = None) -> dict:
     """Aggregate per-camera timeseries into hourly buckets for a neighborhood."""
     from zoneinfo import ZoneInfo
 
+    if camera_ids is None:
+        volume.reload()
+        cctv_data = await _load_cctv_for_neighborhood(name)
+        camera_ids = [c["camera_id"] for c in cctv_data.get("cameras", [])]
     if not camera_ids:
         return {"hours": [], "peak_hour": 0, "peak_pedestrians": 0, "camera_count": 0}
 
@@ -1838,7 +1917,7 @@ async def cctv_timeseries(neighborhood: str):
     """24h rolling timeseries aggregated by hour for a neighborhood's cameras."""
     cctv = await _load_cctv_for_neighborhood(neighborhood)
     cam_ids = [c["camera_id"] for c in cctv.get("cameras", [])]
-    return _aggregate_timeseries_for_neighborhood(neighborhood, camera_ids=cam_ids)
+    return await _aggregate_timeseries_for_neighborhood(neighborhood, camera_ids=cam_ids)
 
 
 @web_app.get("/vision/streetscape/{neighborhood}")
@@ -1899,6 +1978,167 @@ async def vision_streetscape(neighborhood: str):
         },
         "analysis_count": analysis_count,
     }
+
+
+@web_app.get("/parking/latest")
+async def parking_latest():
+    """Latest parking analysis for all neighborhoods."""
+    volume.reload()
+    analysis_dir = Path(PROCESSED_DATA_PATH) / "parking" / "analysis"
+    if not analysis_dir.exists():
+        return {"neighborhoods": [], "count": 0}
+
+    latest_by_nb: dict[str, dict] = {}
+    for jf in sorted(analysis_dir.glob("*.json"), reverse=True)[:500]:
+        try:
+            data = json.loads(jf.read_text())
+            nb = data.get("neighborhood", "")
+            if nb and nb not in latest_by_nb:
+                latest_by_nb[nb] = data
+        except Exception:
+            continue
+
+    neighborhoods = list(latest_by_nb.values())
+    return {"neighborhoods": neighborhoods, "count": len(neighborhoods)}
+
+
+@web_app.get("/parking/{neighborhood}")
+async def parking_neighborhood(neighborhood: str):
+    """Latest parking analysis for a single neighborhood."""
+    data = _load_parking_for_neighborhood(neighborhood)
+    if not data:
+        return JSONResponse({"error": f"No parking data for {neighborhood}"}, status_code=404)
+    return data
+
+
+@web_app.get("/parking/annotated/{neighborhood}")
+async def parking_annotated(neighborhood: str):
+    """Serve annotated satellite JPEG with parking lot overlays."""
+    from fastapi.responses import Response
+
+    volume.reload()
+    slug = neighborhood.lower().replace(" ", "_")
+    ann_dir = Path(PROCESSED_DATA_PATH) / "parking" / "annotated"
+    ann_path = ann_dir / f"{slug}.jpg"
+
+    if not ann_path.exists():
+        return JSONResponse({"error": f"No annotated image for {neighborhood}"}, status_code=404)
+
+    return Response(content=ann_path.read_bytes(), media_type="image/jpeg")
+
+
+def _load_parking_for_neighborhood(name: str) -> dict | None:
+    """Load latest parking analysis JSON for a neighborhood."""
+    volume.reload()
+    analysis_dir = Path(PROCESSED_DATA_PATH) / "parking" / "analysis"
+    if not analysis_dir.exists():
+        return None
+
+    slug = name.lower().replace(" ", "_")
+    # Find latest analysis file for this neighborhood
+    candidates = sorted(analysis_dir.glob(f"{slug}_*.json"), reverse=True)
+    if not candidates:
+        return None
+
+    try:
+        return json.loads(candidates[0].read_text())
+    except Exception:
+        return None
+
+
+@web_app.get("/vision/assess/{neighborhood}")
+async def vision_assess(neighborhood: str):
+    """AI-powered street assessment using GPT-4o vision on collected frames."""
+    from modal_app.openai_utils import openai_available, get_openai_client
+
+    if not openai_available():
+        return JSONResponse(
+            {"error": "Vision assessment requires OpenAI API key", "fallback": "Use /vision/streetscape for YOLO-based analysis"},
+            status_code=503,
+        )
+
+    volume.reload()
+    slug = neighborhood.lower().replace(" ", "_")
+
+    # Collect frames from CCTV and vision pipeline
+    frame_paths: list[Path] = []
+
+    cctv_dir = Path(PROCESSED_DATA_PATH) / "cctv" / "annotated"
+    if cctv_dir.exists():
+        for fp in sorted(cctv_dir.glob("*.jpg"), reverse=True)[:5]:
+            frame_paths.append(fp)
+
+    vision_dir = Path(RAW_DATA_PATH) / "vision" / "frames"
+    if vision_dir.exists():
+        for fp in sorted(vision_dir.glob(f"{slug}*.jpg"), reverse=True)[:5]:
+            frame_paths.append(fp)
+        if len(frame_paths) < 3:
+            for fp in sorted(vision_dir.glob("*.jpg"), reverse=True)[:5]:
+                if fp not in frame_paths:
+                    frame_paths.append(fp)
+
+    frame_paths = frame_paths[:3]
+
+    if not frame_paths:
+        return JSONResponse(
+            {"error": f"No frames available for {neighborhood}", "frame_count": 0},
+            status_code=404,
+        )
+
+    # Build vision messages with frames
+    client = get_openai_client()
+    image_content = []
+    for fp in frame_paths:
+        try:
+            img_bytes = fp.read_bytes()
+            b64 = base64.b64encode(img_bytes).decode("utf-8")
+            image_content.append({
+                "type": "image_url",
+                "image_url": {"url": f"data:image/jpeg;base64,{b64}", "detail": "low"},
+            })
+        except Exception:
+            continue
+
+    if not image_content:
+        return JSONResponse({"error": "Failed to read frame images"}, status_code=500)
+
+    try:
+        resp = await client.chat.completions.create(
+            model="gpt-4o",
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "You are an urban commercial real estate analyst. Analyze street-level images and provide a structured assessment. "
+                        "Return JSON with this schema: {\"storefront_viability\": {\"score\": 1-10, \"available_spaces\": str, \"condition\": str}, "
+                        "\"competitor_presence\": {\"restaurants\": str, \"retail\": str, \"notable_businesses\": [str]}, "
+                        "\"pedestrian_activity\": {\"level\": \"high\"|\"medium\"|\"low\", \"demographics\": str, \"peak_indicators\": str}, "
+                        "\"infrastructure\": {\"transit_access\": str, \"parking\": str, \"road_condition\": str}, "
+                        "\"overall_recommendation\": str (2-3 sentences)}"
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": f"Assess this area in {neighborhood}, Chicago for small business viability. Analyze the street scenes:"},
+                        *image_content,
+                    ],
+                },
+            ],
+            max_tokens=600,
+            temperature=0.3,
+            response_format={"type": "json_object"},
+        )
+
+        assessment = json.loads(resp.choices[0].message.content or "{}")
+        return {
+            "assessment": assessment,
+            "frame_count": len(image_content),
+            "neighborhood": neighborhood,
+            "model": "gpt-4o",
+        }
+    except Exception as e:
+        return JSONResponse({"error": f"Vision assessment failed: {e}"}, status_code=500)
 
 
 @web_app.get("/geo")
@@ -2249,6 +2489,24 @@ Rules:
 - Always wrap file reads in try/except to handle missing or malformed files gracefully
 - Output only the Python code in a ```python``` fence. No explanation."""
 
+CODEGEN_SYSTEM_PROMPT_GPT4O = """You are a senior data analyst. Write a self-contained Python script that answers the user's question using real data files.
+
+Rules:
+- Read data from /data/raw/{source}/ and /data/processed/enriched/ (JSON files)
+- Write results to /output/result.json (required) and optionally /output/chart.png
+- result.json must have: {"title": str, "summary": str, "stats": {key: value}}
+- Only use: json, os, pathlib, glob, collections, datetime, pandas, numpy, matplotlib, seaborn
+- matplotlib.use("Agg") must be called before any plotting
+- Max 100 lines. No network calls, no subprocess, no sys.exit.
+- Create /output/ directory at the start: os.makedirs("/output", exist_ok=True)
+- Wrap ALL file reads in try/except — skip corrupted/missing files gracefully
+- Compute percentile rankings where applicable (e.g. "top 25% of neighborhoods")
+- Detect simple trends: compare recent vs older data when timestamps are available
+- For charts: use dark theme (plt.style.use('dark_background')), proper axis labels, tight_layout
+- Use seaborn color palettes for multi-series plots
+- Validate result.json schema before writing: title must be str, stats must be dict
+- Output only the Python code in a ```python``` fence. No explanation."""
+
 
 def _discover_data_files(neighborhood: str | None = None) -> dict:
     """Scan volume for available data files so the LLM knows what exists."""
@@ -2368,9 +2626,8 @@ async def analyze(payload: _AnalyzeRequest):
                 status_code=404,
             )
 
-        # 2. Generate analysis code via LLM
-        llm_cls = modal.Cls.from_name("alethia", "AlethiaLLM")
-        llm = llm_cls()
+        # 2. Generate analysis code via LLM (GPT-4o when available, Qwen3 fallback)
+        from modal_app.openai_utils import openai_available, get_openai_client
 
         prompt = _build_codegen_prompt(
             payload.question,
@@ -2379,11 +2636,33 @@ async def analyze(payload: _AnalyzeRequest):
             payload.business_type,
             available,
         )
-        messages = [
-            {"role": "system", "content": CODEGEN_SYSTEM_PROMPT},
-            {"role": "user", "content": prompt},
-        ]
-        response = await llm.generate.remote.aio(messages, max_tokens=2048, temperature=0.3)
+
+        async def _codegen_via_qwen(p: str) -> str:
+            llm_cls = modal.Cls.from_name("alethia", "AlethiaLLM")
+            llm = llm_cls()
+            msgs = [{"role": "system", "content": CODEGEN_SYSTEM_PROMPT}, {"role": "user", "content": p}]
+            return await llm.generate.remote.aio(msgs, max_tokens=2048, temperature=0.3)
+
+        model_used = "qwen3-8b"
+        if openai_available():
+            try:
+                client = get_openai_client()
+                oai_resp = await client.chat.completions.create(
+                    model="gpt-4o",
+                    messages=[
+                        {"role": "system", "content": CODEGEN_SYSTEM_PROMPT_GPT4O},
+                        {"role": "user", "content": prompt},
+                    ],
+                    max_tokens=2048,
+                    temperature=0.3,
+                )
+                response = oai_resp.choices[0].message.content or ""
+                model_used = "gpt-4o"
+            except Exception as e:
+                print(f"GPT-4o codegen failed, falling back to Qwen3: {e}")
+                response = await _codegen_via_qwen(prompt)
+        else:
+            response = await _codegen_via_qwen(prompt)
 
         code = _extract_python_code(response)
         if not code:
@@ -2429,12 +2708,14 @@ async def analyze(payload: _AnalyzeRequest):
         if span:
             span.set_attribute("deep_dive.has_chart", chart_b64 is not None)
             span.set_attribute("deep_dive.code_lines", len(code.splitlines()))
+            span.set_attribute("deep_dive.model", model_used)
 
         return {
             "code": code,
             "result": result_data or {"title": "Analysis", "summary": "Script completed but produced no result.json", "stats": {}, "raw_output": stdout_text[:2000]},
             "chart": chart_b64,
             "stderr": stderr_text[:500] if stderr_text else None,
+            "model_used": model_used,
         }
 
     except Exception as e:
