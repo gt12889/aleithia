@@ -138,12 +138,15 @@ export default function MLMonitor() {
             const gpuKey = model.gpu === 'H100' ? 'h100_llm' : model.task.includes('Classification') ? 't4_classifier' : model.task.includes('CCTV') ? 't4_cctv' : 't4_sentiment'
             const liveStatus = status?.gpu_status[gpuKey]
             const isOnline = liveStatus === 'available'
+            const isLoading = status === null && !error
 
             return (
               <div key={model.name} className="px-4 py-3 flex items-center justify-between">
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2">
-                    <div className={`w-1.5 h-1.5 rounded-full ${isOnline ? 'bg-emerald-400' : 'bg-white/20'}`} />
+                    <div className={`w-1.5 h-1.5 rounded-full shrink-0 ${
+                      isLoading ? 'bg-amber-400/80 animate-pulse' : isOnline ? 'bg-emerald-400' : 'bg-white/20'
+                    }`} />
                     <span className="text-xs font-medium text-white/80 truncate">{model.name}</span>
                     <span className="text-[10px] font-mono text-white/15 border border-white/[0.06] px-1.5 py-0.5">{model.gpu}</span>
                   </div>
@@ -156,9 +159,16 @@ export default function MLMonitor() {
                       {model.contextLen ? `${model.contextLen.toLocaleString()} ctx` : `batch ${model.maxBatch}`}
                     </div>
                   </div>
-                  <span className={`text-[10px] font-mono ${isOnline ? 'text-emerald-400/60' : 'text-white/15'}`}>
-                    {isOnline ? 'online' : 'offline'}
-                  </span>
+                  {isLoading ? (
+                    <span className="flex items-center gap-1.5 text-[10px] font-mono text-amber-400/70">
+                      <span className="w-2.5 h-2.5 border border-amber-400/40 border-t-amber-400 rounded-full animate-spin" />
+                      checking…
+                    </span>
+                  ) : (
+                    <span className={`text-[10px] font-mono ${isOnline ? 'text-emerald-400/60' : 'text-white/15'}`}>
+                      {isOnline ? 'online' : 'offline'}
+                    </span>
+                  )}
                 </div>
               </div>
             )
