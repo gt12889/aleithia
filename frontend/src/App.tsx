@@ -7,7 +7,6 @@ import LandingPage from './components/LandingPage.tsx'
 import OnboardingForm from './components/OnboardingForm.tsx'
 import Dashboard from './components/Dashboard.tsx'
 import HowItWorks from './components/HowItWorks.tsx'
-import MemoryGraphPage from './components/MemoryGraphPage.tsx'
 
 function App() {
   const { isLoaded, isSignedIn, user } = useUser()
@@ -59,7 +58,6 @@ function App() {
   return (
     <Routes>
       <Route path="/how-it-works" element={<HowItWorks onBack={() => navigate('/')} />} />
-      <Route path="/memory-graph" element={<MemoryGraphPage onBack={() => navigate('/')} />} />
       <Route
         path="/"
         element={
