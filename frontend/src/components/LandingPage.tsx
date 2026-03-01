@@ -146,7 +146,7 @@ export default function LandingPage({ onGetStarted, onViewSource }: Props) {
           <div className="flex-1 flex items-center justify-center px-10">
             <div className="max-w-3xl text-center">
               <p className="text-xs font-mono font-medium uppercase tracking-[0.3em] text-white/40 mb-6">
-                Chicago Business Intelligence Platform
+                 Business Intelligence Platform
               </p>
               <h1 className="text-5xl sm:text-7xl font-bold tracking-tight text-white mb-8 leading-[1.05]">
                 Infrastructure-grade
@@ -174,11 +174,27 @@ export default function LandingPage({ onGetStarted, onViewSource }: Props) {
               </div>
             </div>
           </div>
+
+          {/* Floating scroll arrow */}
+          <button
+            type="button"
+            onClick={() => document.getElementById('next')?.scrollIntoView({ behavior: 'smooth' })}
+            className="pointer-events-auto absolute bottom-8 left-1/2 -translate-x-1/2 text-white/40 hover:text-white/70 transition-colors cursor-pointer"
+            aria-label="Scroll to next section"
+          >
+            <svg
+              className="w-6 h-6 animate-bounce"
+              viewBox="0 0 24 24"
+              fill="currentColor"
+            >
+              <path d="M7 10l5 6 5-6H7z" />
+            </svg>
+          </button>
         </div>
       </section>
 
       {/* ── Sponsors Ticker ── */}
-      <section className="relative border-t border-white/[0.04] py-10">
+      <section id="next" className="relative border-t border-white/[0.04] py-10 scroll-mt-0">
         <p className="text-center text-[10px] font-mono uppercase tracking-[0.3em] text-white/20 mb-6">
           Made possible by
         </p>
