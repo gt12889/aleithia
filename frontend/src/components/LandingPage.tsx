@@ -34,6 +34,23 @@ function tuneScene(app: Application) {
   })
 }
 
+const SPONSORS = [
+  { name: 'Modal' },
+  { name: 'SuperMemory' },
+  { name: 'Arize AI' },
+  { name: 'OpenAI' },
+  { name: 'GPT-4o' },
+  { name: 'Claude' },
+  { name: 'Cursor Agent' },
+]
+
+const STATS = [
+  { value: '9', label: 'Live Sources' },
+  { value: '77', label: 'Neighborhoods' },
+  { value: '140K+', label: 'Records Indexed' },
+  { value: '< 30s', label: 'Analysis Time' },
+]
+
 const DATA_PILLARS = [
   {
     label: '01',
@@ -137,13 +154,51 @@ export default function LandingPage({ onGetStarted, onViewSource }: Props) {
                 </button>
                 <button
                   onClick={onViewSource}
-                  className="pointer-events-auto px-8 py-3.5 text-sm font-semibold border border-white/20 text-white/70 hover:text-white hover:border-white/40 transition-colors cursor-pointer"
+                  className="pointer-events-auto px-8 py-3.5 text-sm font-semibold bg-white text-[#06080d] hover:bg-gray-200 transition-colors cursor-pointer"
                 >
                   How It Works
                 </button>
               </div>
             </div>
           </div>
+        </div>
+      </section>
+
+      {/* ── Sponsors Ticker ── */}
+      <section className="relative border-t border-white/[0.04] py-10">
+        <p className="text-center text-[10px] font-mono uppercase tracking-[0.3em] text-white/20 mb-6">
+          Sponsored by
+        </p>
+        <LogoLoop
+          logos={SPONSORS.map((s) => ({
+            node: (
+              <span className="text-sm font-semibold tracking-wide text-white/40 hover:text-white/70 transition-colors uppercase">
+                {s.name}
+              </span>
+            ),
+          }))}
+          speed={40}
+          gap={64}
+          logoHeight={24}
+          pauseOnHover
+          fadeOut
+          fadeOutColor="#06080d"
+        />
+      </section>
+
+      {/* ── Live Stats ── */}
+      <section className="border-t border-white/[0.04] py-16">
+        <div className="max-w-5xl mx-auto px-10 grid grid-cols-2 sm:grid-cols-4 gap-8">
+          {STATS.map((s) => (
+            <div key={s.label} className="text-center">
+              <p className="text-3xl sm:text-4xl font-bold tracking-tight text-white mb-1">
+                {s.value}
+              </p>
+              <p className="text-xs font-mono text-white/30 uppercase tracking-wider">
+                {s.label}
+              </p>
+            </div>
+          ))}
         </div>
       </section>
 
