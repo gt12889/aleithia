@@ -69,6 +69,30 @@ class SupermemoryClient:
             return results[0].get("metadata", {})
         return {}
 
+    async def get_profile(self, user_id: str) -> dict:
+        """Fetch user profile from Supermemory Profile API (v4)."""
+        async with httpx.AsyncClient(timeout=15, follow_redirects=True) as client:
+            resp = await client.post(
+                "https://api.supermemory.ai/v4/profile",
+                headers=self.headers,
+                json={"containerTag": f"user_{user_id}"},
+            )
+            if resp.status_code == 200:
+                return resp.json().get("profile", {})
+            return {}
+
+    async def add_file(self, file_bytes: bytes, filename: str, container_tag: str = "chicago_vision") -> dict:
+        """Upload image/file to Supermemory (multi-modal API)."""
+        async with httpx.AsyncClient(timeout=60, follow_redirects=True) as client:
+            resp = await client.post(
+                f"{SUPERMEMORY_BASE}/documents/file",
+                headers={"Authorization": f"Bearer {self.api_key}"},
+                files={"file": (filename, file_bytes, "image/jpeg")},
+                data={"containerTags": container_tag},
+            )
+            resp.raise_for_status()
+            return resp.json()
+
     async def store_conversation(self, user_id: str, messages: list[dict]) -> dict:
         """Store chat history for user context."""
         content = "\n".join(
@@ -172,5 +196,64 @@ async def push_pipeline_data_to_supermemory():
                     print("Rate limited, backing off 10s...")
                     await asyncio.sleep(10)
 
+    # Trigger vision data push (multi-modal API)
+    push_vision_to_supermemory.spawn()
+
     print(f"Supermemory sync complete: {synced} documents pushed, {errors} errors")
+    return synced
+
+
+@app.function(
+    image=base_image,
+    volumes={"/data": volume},
+    secrets=[modal.Secret.from_name("alethia-secrets")],
+    timeout=600,
+)
+async def push_vision_to_supermemory():
+    """Push CCTV frames (multi-modal) and vision analysis text to Supermemory."""
+    api_key = os.environ.get("SUPERMEMORY_API_KEY", "")
+    if not api_key:
+        print("SUPERMEMORY_API_KEY not set, skipping vision sync")
+        return 0
+
+    client = SupermemoryClient(api_key)
+    synced = 0
+
+    # 1. Upload annotated CCTV frames via multi-modal file API
+    cctv_dir = Path(PROCESSED_DATA_PATH) / "cctv" / "annotated"
+    if cctv_dir.exists():
+        jpg_files = sorted(cctv_dir.glob("*.jpg"), key=lambda p: p.stat().st_mtime, reverse=True)[:10]
+        print(f"Uploading {len(jpg_files)} CCTV frames to Supermemory (multi-modal)...")
+        for jpg_file in jpg_files:
+            try:
+                file_bytes = jpg_file.read_bytes()
+                await client.add_file(file_bytes, jpg_file.name, container_tag="chicago_vision")
+                synced += 1
+                await asyncio.sleep(0.5)
+            except Exception as e:
+                print(f"Multi-modal upload error for {jpg_file.name}: {e}")
+
+    # 2. Push vision analysis text summaries
+    analysis_dir = Path(PROCESSED_DATA_PATH) / "vision" / "analysis"
+    if analysis_dir.exists():
+        json_files = sorted(analysis_dir.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True)[:20]
+        print(f"Pushing {len(json_files)} vision analysis docs to Supermemory...")
+        for json_file in json_files:
+            try:
+                analysis = json.loads(json_file.read_text())
+                neighborhood = analysis.get("neighborhood", json_file.stem)
+                summary = analysis.get("summary", "")
+                detections = analysis.get("detections", {})
+                content = f"Streetscape analysis for {neighborhood}: {summary}\nDetections: {json.dumps(detections)}"
+                await client.add_memory(
+                    content=content,
+                    metadata={"type": "vision_analysis", "neighborhood": neighborhood},
+                    container_tag="chicago_vision",
+                )
+                synced += 1
+                await asyncio.sleep(0.3)
+            except Exception as e:
+                print(f"Vision analysis sync error for {json_file.name}: {e}")
+
+    print(f"Vision sync complete: {synced} items pushed")
     return synced

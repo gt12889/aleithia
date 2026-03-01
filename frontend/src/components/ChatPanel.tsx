@@ -5,7 +5,7 @@ import ProcessFlow from './ProcessFlow.tsx'
 import type { ProcessStage } from './ProcessFlow.tsx'
 import DeepDivePanel from './DeepDivePanel.tsx'
 import { requestDeepDive } from '../api.ts'
-import type { DeepDiveResult } from '../api.ts'
+import type { DeepDiveResult, MemoryInfo } from '../api.ts'
 
 interface AgentInfo {
   agents_deployed: number
@@ -41,9 +41,10 @@ interface Props {
   processLogs?: string[]
   neighborhood?: string
   businessType?: string
+  memoryInfo?: MemoryInfo | null
 }
 
-export default function ChatPanel({ messages, onSend, loading, isStreaming, agentInfo, agentActive, agentElapsedMs, statusMessage, processStage, chatQuestion, processLogs, neighborhood, businessType }: Props) {
+export default function ChatPanel({ messages, onSend, loading, isStreaming, agentInfo, agentActive, agentElapsedMs, statusMessage, processStage, chatQuestion, processLogs, neighborhood, businessType, memoryInfo }: Props) {
   const [input, setInput] = useState('')
   const [deepDives, setDeepDives] = useState<Record<number, DeepDiveState>>({})
   const messagesEndRef = useRef<HTMLDivElement>(null)
@@ -102,6 +103,28 @@ export default function ChatPanel({ messages, onSend, loading, isStreaming, agen
         <p className="text-[10px] font-mono text-white/20 mt-0.5">Qwen3-8B + Agent Swarm</p>
       </div>
 
+      {memoryInfo?.has_profile && (
+        <div className="px-4 py-2 border-b border-white/[0.06] bg-purple-500/[0.04]">
+          <div className="flex items-center gap-2">
+            <span className="relative flex h-2 w-2">
+              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-purple-400 opacity-75" />
+              <span className="relative inline-flex rounded-full h-2 w-2 bg-purple-500" />
+            </span>
+            <span className="text-[10px] font-medium text-purple-300/80 uppercase tracking-wider">Memory Active</span>
+            {memoryInfo.past_interactions > 0 && (
+              <span className="text-[10px] font-mono text-white/25 ml-auto">{memoryInfo.past_interactions} prior</span>
+            )}
+          </div>
+          {memoryInfo.profile_facts.length > 0 && (
+            <div className="mt-1 space-y-0.5">
+              {memoryInfo.profile_facts.slice(0, 2).map((fact, i) => (
+                <p key={i} className="text-[10px] text-white/30 truncate">{fact}</p>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
       <div className="flex-1 overflow-y-auto p-4 space-y-3 min-h-0">
         {messages.length === 0 && (
           <div className="py-8">
@@ -137,7 +160,7 @@ export default function ChatPanel({ messages, onSend, loading, isStreaming, agen
                 <div
                   className={`px-4 py-2.5 text-xs leading-relaxed ${
                     msg.role === 'user'
-                      ? 'bg-white text-[#06080d]'
+                      ? '!bg-white !text-[#06080d]'
                       : 'bg-white/[0.04] border border-white/[0.06] text-white/70'
                   }`}
                 >
@@ -227,7 +250,7 @@ export default function ChatPanel({ messages, onSend, loading, isStreaming, agen
           <button
             type="submit"
             disabled={!input.trim() || loading}
-            className="bg-white text-[#06080d] disabled:bg-white/[0.06] disabled:text-white/20 disabled:cursor-not-allowed px-4 py-2.5 text-xs font-medium transition-colors cursor-pointer"
+            className="!bg-white !text-[#06080d] disabled:!bg-white/[0.06] disabled:!text-white/20 disabled:cursor-not-allowed px-4 py-2.5 text-xs font-medium transition-colors cursor-pointer"
           >
             Send
           </button>

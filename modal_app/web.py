@@ -4,6 +4,7 @@ Endpoints: /chat (streaming SSE), /brief, /alerts, /status, /metrics, /sources, 
            /news, /politics, /inspections, /permits, /licenses, /summary
 Modal features: @modal.asgi_app, streaming SSE
 """
+import asyncio
 import base64
 import json
 import os
@@ -635,12 +636,43 @@ async def chat(request: Request):
 
         span_ctx = tracer.start_as_current_span("chat-request") if tracer else None
         span = span_ctx.__enter__() if span_ctx else None
+
+        # Initialize Supermemory client early for profile + memory retrieval
+        api_key = os.environ.get("SUPERMEMORY_API_KEY", "")
+        sm = None
+        profile_data = {}
+        past_memories = []
+        if api_key:
+            try:
+                from modal_app.supermemory import SupermemoryClient
+                sm = SupermemoryClient(api_key)
+                # Parallel fetch: profile (v4 API) + user memories (retrieval API)
+                profile_task = sm.get_profile(user_id)
+                memory_task = sm.search(question, container_tags=[f"user_{user_id}"], limit=5)
+                profile_data, past_memories = await asyncio.gather(
+                    profile_task, memory_task, return_exceptions=True
+                )
+                if isinstance(profile_data, Exception):
+                    profile_data = {}
+                if isinstance(past_memories, Exception):
+                    past_memories = []
+            except Exception:
+                profile_data = {}
+                past_memories = []
+
+        # Emit memory SSE event
+        static_facts = profile_data.get("static", []) if isinstance(profile_data, dict) else []
+        dynamic_facts = profile_data.get("dynamic", []) if isinstance(profile_data, dict) else []
+        has_profile = bool(static_facts or dynamic_facts)
+        yield f"data: {json.dumps({'type': 'memory', 'has_profile': has_profile, 'profile_facts': (static_facts[:3] + dynamic_facts[:2]) if has_profile else [], 'past_interactions': len(past_memories)})}\n\n"
+
         try:
             if span:
                 span.set_attribute("openinference.span.kind", "CHAIN")
                 span.set_attribute("input.value", question)
                 span.set_attribute("chat.business_type", business_type)
                 span.set_attribute("chat.neighborhood", neighborhood)
+                span.set_attribute("chat.has_profile", has_profile)
             # Phase 1: Agent gathering (returns synthesis_messages, NOT response text)
             from modal_app.instrumentation import inject_context
             orchestrate_query = modal.Function.from_name("alethia", "orchestrate_query")
@@ -675,10 +707,30 @@ async def chat(request: Request):
             # Status bridge between agents and LLM streaming
             yield f"data: {json.dumps({'type': 'status', 'content': 'Synthesizing intelligence report...'})}\n\n"
 
-            # Phase 2: Real LLM streaming
+            # Phase 2: Inject user memory context into synthesis messages
+            messages = result["synthesis_messages"]
+            if has_profile or past_memories:
+                memory_context_parts = []
+                if static_facts:
+                    memory_context_parts.append(f"Known facts: {'; '.join(str(f) for f in static_facts[:5])}")
+                if dynamic_facts:
+                    memory_context_parts.append(f"Recent context: {'; '.join(str(f) for f in dynamic_facts[:3])}")
+                if past_memories:
+                    snippets = []
+                    for mem in past_memories[:3]:
+                        content = mem.get("content", "") if isinstance(mem, dict) else str(mem)
+                        snippets.append(content[:200])
+                    memory_context_parts.append(f"Past interactions: {'; '.join(snippets)}")
+                memory_block = "\n\nUSER CONTEXT FROM MEMORY:\n" + "\n".join(memory_context_parts) + "\nUse this context to personalize your response."
+                # Append to the last user message in synthesis
+                for i in range(len(messages) - 1, -1, -1):
+                    if messages[i].get("role") == "user":
+                        messages[i] = {**messages[i], "content": messages[i]["content"] + memory_block}
+                        break
+
+            # Real LLM streaming
             llm_cls = modal.Cls.from_name("alethia", "AlethiaLLM")
             llm = llm_cls()
-            messages = result["synthesis_messages"]
 
             full_response = ""
             async for token in llm.generate_stream.remote_gen.aio(
@@ -694,16 +746,17 @@ async def chat(request: Request):
 
             yield f"data: {json.dumps({'type': 'done'})}\n\n"
 
-            # Store conversation in Supermemory (fire-and-forget)
-            api_key = os.environ.get("SUPERMEMORY_API_KEY", "")
-            if api_key:
+            # Store conversation + seed profile in Supermemory (fire-and-forget)
+            if sm:
                 try:
-                    from modal_app.supermemory import SupermemoryClient
-                    sm = SupermemoryClient(api_key)
-                    await sm.store_conversation(user_id, [
-                        {"role": "user", "content": question},
-                        {"role": "assistant", "content": full_response},
-                    ])
+                    await asyncio.gather(
+                        sm.store_conversation(user_id, [
+                            {"role": "user", "content": question},
+                            {"role": "assistant", "content": full_response},
+                        ]),
+                        sm.sync_user_profile(user_id, business_type, neighborhood),
+                        return_exceptions=True,
+                    )
                 except Exception:
                     pass
 
@@ -716,6 +769,43 @@ async def chat(request: Request):
                 span_ctx.__exit__(None, None, None)
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")
+
+
+@web_app.get("/user/memories")
+async def user_memories(user_id: str = ""):
+    """Get user profile and memory state from Supermemory."""
+    if not user_id:
+        return JSONResponse({"error": "user_id is required"}, status_code=400)
+
+    api_key = os.environ.get("SUPERMEMORY_API_KEY", "")
+    if not api_key:
+        return {"profile": {}, "memories": [], "memory_count": 0}
+
+    try:
+        from modal_app.supermemory import SupermemoryClient
+        sm = SupermemoryClient(api_key)
+        profile_data, memories = await asyncio.gather(
+            sm.get_profile(user_id),
+            sm.search("", container_tags=[f"user_{user_id}"], limit=20),
+            return_exceptions=True,
+        )
+        if isinstance(profile_data, Exception):
+            profile_data = {}
+        if isinstance(memories, Exception):
+            memories = []
+
+        memory_items = [
+            {"content": m.get("content", "")[:300], "type": m.get("metadata", {}).get("type", "unknown")}
+            for m in memories
+            if isinstance(m, dict)
+        ]
+        return {
+            "profile": profile_data if isinstance(profile_data, dict) else {},
+            "memories": memory_items,
+            "memory_count": len(memory_items),
+        }
+    except Exception as e:
+        return {"profile": {}, "memories": [], "memory_count": 0, "error": str(e)}
 
 
 @web_app.get("/brief/{neighborhood}")
@@ -1767,36 +1857,59 @@ async def geo():
 
 @web_app.get("/graph")
 async def graph(page: int = 1, limit: int = 200):
-    """Proxy to Supermemory list documents for Memory Graph visualization."""
-    empty = {"documents": [], "pagination": {"currentPage": 1, "totalPages": 0}}
+    """Proxy to Supermemory graph viewport — returns documents WITH memories + edges."""
+    empty: dict = {"documents": [], "edges": [], "pagination": {"currentPage": 1, "totalPages": 0}}
     try:
         api_key = os.environ.get("SUPERMEMORY_API_KEY", "")
         if not api_key:
             return JSONResponse(empty, status_code=200)
         import httpx
         async with httpx.AsyncClient(timeout=30) as client:
+            # 1. Get graph bounds to know the full viewport
+            bounds_resp = await client.get(
+                "https://api.supermemory.ai/v3/graph/bounds",
+                headers={"Authorization": f"Bearer {api_key}"},
+            )
+            viewport = {"minX": 0, "maxX": 1000000, "minY": 0, "maxY": 1000000}
+            if bounds_resp.is_success:
+                bounds_data = bounds_resp.json()
+                if bounds_data.get("bounds"):
+                    viewport = bounds_data["bounds"]
+
+            # 2. Fetch graph viewport data: documents (with memories) + edges
             resp = await client.post(
-                "https://api.supermemory.ai/v3/documents/documents",
+                "https://api.supermemory.ai/v3/graph/viewport",
                 headers={
                     "Content-Type": "application/json",
                     "Authorization": f"Bearer {api_key}",
                 },
                 json={
-                    "page": page,
-                    "limit": min(limit, 200),  # Supermemory max is 200
-                    "sort": "createdAt",
-                    "order": "desc",
+                    "viewport": viewport,
+                    "limit": min(limit, 500),
                 },
             )
             if not resp.is_success:
-                print(f"Supermemory /graph HTTP {resp.status_code}: {resp.text[:200]}")
+                print(f"Supermemory /graph/viewport HTTP {resp.status_code}: {resp.text[:200]}")
                 return JSONResponse(empty, status_code=200)
             data = resp.json()
-            # Memory Graph expects 'documents'; Supermemory may return 'memories'
-            if "memories" in data and "documents" not in data:
-                data["documents"] = data["memories"]
-            # Return as JSONResponse to avoid FastAPI serialization issues
-            return JSONResponse(data, status_code=200)
+
+            # 3. Normalize: map 'memories' on each doc to 'memoryEntries'
+            docs = data.get("documents", [])
+            for doc in docs:
+                if "memories" in doc and "memoryEntries" not in doc:
+                    doc["memoryEntries"] = doc["memories"]
+
+            total_count = data.get("totalCount", len(docs))
+            result = {
+                "documents": docs,
+                "edges": data.get("edges", []),
+                "pagination": {
+                    "currentPage": page,
+                    "totalPages": max(1, -(-total_count // max(limit, 1))),
+                    "totalItems": total_count,
+                },
+            }
+            return JSONResponse(result, status_code=200)
     except Exception as e:
         print(f"Supermemory /graph error: {type(e).__name__}: {e}")
         return JSONResponse(empty, status_code=200)

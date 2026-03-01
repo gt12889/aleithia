@@ -3,6 +3,18 @@ import type { DataSources, GeoJSON, NeighborhoodData, Document, CCTVTimeseries, 
 // Modal deployed endpoint — set via VITE_MODAL_URL, fallback to local proxy
 const API_BASE = import.meta.env.VITE_MODAL_URL || '/api/data'
 
+// Stable user identity — persisted in localStorage so Supermemory can retrieve past context
+function getOrCreateUserId(): string {
+  const KEY = 'alethia_user_id'
+  let id = localStorage.getItem(KEY)
+  if (!id) {
+    id = `anon_${crypto.randomUUID()}`
+    localStorage.setItem(KEY, id)
+  }
+  return id
+}
+export const USER_ID = getOrCreateUserId()
+
 async function fetchJSON<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${API_BASE}${path}`, init)
   if (!res.ok) {
@@ -30,6 +42,12 @@ export interface UserQuery {
   created_at: string
 }
 
+export interface MemoryInfo {
+  has_profile: boolean
+  profile_facts: string[]
+  past_interactions: number
+}
+
 export interface StreamChatCallbacks {
   onStatus?: (content: string) => void
   onAgents?: (data: {
@@ -44,6 +62,7 @@ export interface StreamChatCallbacks {
       error?: boolean
     }>
   }) => void
+  onMemory?: (data: MemoryInfo) => void
   onToken?: (token: string) => void
   onDone?: () => void
   onError?: (error: string) => void
@@ -70,6 +89,7 @@ export async function streamChat(
     headers,
     body: JSON.stringify({
       message,
+      user_id: USER_ID,
       business_type: profile.business_type,
       neighborhood: profile.neighborhood,
     }),
@@ -107,6 +127,9 @@ export async function streamChat(
             break
           case 'agents':
             callbacks.onAgents?.(data)
+            break
+          case 'memory':
+            callbacks.onMemory?.(data)
             break
           case 'token':
             callbacks.onToken?.(data.content)
@@ -319,4 +342,14 @@ export async function fetchCityGraph(): Promise<CityGraphData> {
 
 export async function fetchNeighborhoodGraph(neighborhood: string): Promise<CityGraphData> {
   return fetchJSON<CityGraphData>(`/graph/neighborhood/${encodeURIComponent(neighborhood)}`)
+}
+
+export interface UserMemoryData {
+  profile: { static?: string[]; dynamic?: string[] }
+  memories: Array<{ content: string; type: string }>
+  memory_count: number
+}
+
+export async function fetchUserMemories(userId: string): Promise<UserMemoryData> {
+  return fetchJSON<UserMemoryData>(`/user/memories?user_id=${encodeURIComponent(userId)}`)
 }
