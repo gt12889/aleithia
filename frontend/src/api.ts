@@ -3,10 +3,16 @@ import type { DataSources, GeoJSON, NeighborhoodData, Document } from './types'
 // Modal deployed endpoint — set via VITE_MODAL_URL, fallback to local proxy
 const API_BASE = import.meta.env.VITE_MODAL_URL || '/api/data'
 
-async function fetchJSON<T>(path: string): Promise<T> {
-  const res = await fetch(`${API_BASE}${path}`)
+async function fetchJSON<T>(path: string, init?: RequestInit): Promise<T> {
+  const res = await fetch(`${API_BASE}${path}`, init)
   if (!res.ok) throw new Error(`API error: ${res.status}`)
   return res.json()
+}
+
+export interface SavedSettings {
+  user_id: string
+  location_type: string
+  neighborhood: string
 }
 
 export interface StreamChatCallbacks {
@@ -135,6 +141,26 @@ export const api = {
   },
   news: () => fetchJSON<Document[]>('/news'),
   politics: () => fetchJSON<Document[]>('/politics'),
+  reddit: (neighborhood?: string) => {
+    const qs = neighborhood ? `?neighborhood=${encodeURIComponent(neighborhood)}` : ''
+    return fetchJSON<Document[]>(`/reddit${qs}`)
+  },
+  reviews: (neighborhood?: string) => {
+    const qs = neighborhood ? `?neighborhood=${encodeURIComponent(neighborhood)}` : ''
+    return fetchJSON<Document[]>(`/reviews${qs}`)
+  },
+  realestate: (neighborhood?: string) => {
+    const qs = neighborhood ? `?neighborhood=${encodeURIComponent(neighborhood)}` : ''
+    return fetchJSON<Document[]>(`/realestate${qs}`)
+  },
+  tiktok: (neighborhood?: string) => {
+    const qs = neighborhood ? `?neighborhood=${encodeURIComponent(neighborhood)}` : ''
+    return fetchJSON<Document[]>(`/tiktok${qs}`)
+  },
+  traffic: (neighborhood?: string) => {
+    const qs = neighborhood ? `?neighborhood=${encodeURIComponent(neighborhood)}` : ''
+    return fetchJSON<Document[]>(`/traffic${qs}`)
+  },
   graph: (opts?: { page?: number; limit?: number }) => {
     const params = new URLSearchParams()
     if (opts?.page) params.set('page', String(opts.page))
@@ -142,4 +168,20 @@ export const api = {
     const qs = params.toString()
     return fetchJSON<{ documents: unknown[]; pagination?: { currentPage: number; totalPages: number } }>(`/graph${qs ? `?${qs}` : ''}`)
   },
+  getUserSettings: (userId: string) => fetchJSON<SavedSettings>('/user/settings', {
+    headers: {
+      'x-user-id': userId,
+    },
+  }),
+  saveUserSettings: (userId: string, locationType: string, neighborhood: string) => fetchJSON<SavedSettings>('/user/settings', {
+    method: 'PUT',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-user-id': userId,
+    },
+    body: JSON.stringify({
+      location_type: locationType,
+      neighborhood,
+    }),
+  }),
 }

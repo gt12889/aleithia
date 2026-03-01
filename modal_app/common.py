@@ -21,6 +21,7 @@ class SourceType(str, Enum):
     VISION = "vision"
     TRAFFIC = "traffic"
     TIKTOK = "tiktok"
+    CCTV = "cctv"
 
 
 class Document(BaseModel):
@@ -100,6 +101,21 @@ class NeighborhoodVisionAnalysis(BaseModel):
     person_count: int
     vehicle_count: int
     source_video: str = ""  # YouTube URL used for training
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+
+class CCTVAnalysis(BaseModel):
+    """Per-frame CCTV analysis from YOLOv8n on IDOT highway cameras."""
+    camera_id: str
+    location: str
+    lat: float
+    lng: float
+    direction: str = ""
+    pedestrians: int = 0
+    vehicles: int = 0
+    bicycles: int = 0
+    density_level: str = "low"  # low / medium / high
+    annotated_image_path: str = ""
     timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
@@ -192,6 +208,42 @@ COMMUNITY_AREA_MAP: dict[int, str] = {
     71: "Auburn Gresham", 72: "Beverly", 73: "Washington Heights",
     74: "Mount Greenwood", 75: "Morgan Park", 76: "O'Hare", 77: "Edgewater",
 }
+
+# Colloquial/sub-area names → community area number
+# These are popular neighborhood names that don't match official CA names
+NEIGHBORHOOD_TO_COMMUNITY_AREA: dict[str, int] = {
+    "Wicker Park": 24,       # West Town
+    "Bucktown": 24,          # West Town
+    "Pilsen": 31,            # Lower West Side
+    "River North": 8,        # Near North Side
+    "West Loop": 28,         # Near West Side
+    "Gold Coast": 8,         # Near North Side
+    "Old Town": 7,           # Lincoln Park
+    "Boystown": 6,           # Lakeview
+    "Chinatown": 34,         # Armour Square
+    "South Loop": 33,        # Near South Side
+    "Streeterville": 8,      # Near North Side
+    "Ukrainian Village": 24, # West Town
+    "Little Italy": 28,      # Near West Side
+    "Little Village": 30,    # South Lawndale
+    "Andersonville": 77,     # Edgewater
+    "Bronzeville": 35,       # Douglas
+    "Ravenswood": 4,         # Lincoln Square
+    "Roscoe Village": 5,     # North Center
+}
+
+# Pre-computed reverse lookup: neighborhood name (lower) → community area number string
+_NAME_TO_CA: dict[str, str] = {}
+for _num, _name in COMMUNITY_AREA_MAP.items():
+    _NAME_TO_CA[_name.lower()] = str(_num)
+for _name, _num in NEIGHBORHOOD_TO_COMMUNITY_AREA.items():
+    _NAME_TO_CA[_name.lower()] = str(_num)
+
+
+def neighborhood_to_ca(name: str) -> str:
+    """Return community area number as string, or empty string if not found."""
+    return _NAME_TO_CA.get(name.lower(), "")
+
 
 # Census tract (6-digit FIPS) → community area number
 # Source: Chicago Data Portal Census Tracts Boundaries (74p9-q2aq)
@@ -438,6 +490,52 @@ async def gather_with_limit(
                 return None
 
     return await asyncio.gather(*[_limited(c) for c in coros])
+
+
+def compute_freshness(timestamp_str: str | None = None, file_mtime: float | None = None) -> dict:
+    """Compute data freshness from a timestamp string or file mtime.
+
+    Returns {"age_seconds": int, "age_human": "20m ago", "freshness_label": "fresh|recent|aging|stale"}.
+    """
+    now = datetime.now(timezone.utc)
+
+    if timestamp_str:
+        try:
+            ts = datetime.fromisoformat(timestamp_str.replace("Z", "+00:00"))
+            if ts.tzinfo is None:
+                ts = ts.replace(tzinfo=timezone.utc)
+        except (ValueError, AttributeError):
+            return {"age_seconds": -1, "age_human": "unknown", "freshness_label": "stale"}
+    elif file_mtime is not None:
+        ts = datetime.fromtimestamp(file_mtime, tz=timezone.utc)
+    else:
+        return {"age_seconds": -1, "age_human": "unknown", "freshness_label": "stale"}
+
+    age_seconds = int((now - ts).total_seconds())
+    if age_seconds < 0:
+        age_seconds = 0
+
+    # Human-readable age
+    if age_seconds < 60:
+        age_human = f"{age_seconds}s ago"
+    elif age_seconds < 3600:
+        age_human = f"{age_seconds // 60}m ago"
+    elif age_seconds < 86400:
+        age_human = f"{age_seconds // 3600}h ago"
+    else:
+        age_human = f"{age_seconds // 86400}d ago"
+
+    # Freshness label
+    if age_seconds < 3600:
+        label = "fresh"
+    elif age_seconds < 86400:
+        label = "recent"
+    elif age_seconds < 604800:
+        label = "aging"
+    else:
+        label = "stale"
+
+    return {"age_seconds": age_seconds, "age_human": age_human, "freshness_label": label}
 
 
 async def safe_queue_push(queue, docs: list[dict], source: str) -> int:

@@ -182,7 +182,6 @@ async def process_queue_batch():
             else:
                 doc["sentiment"] = sent_result
 
-            doc["status"] = "enriched"
             out_path = enriched_dir / f"{doc.get('id', f'doc-{i}')}.json"
             out_path.write_text(json.dumps(doc, indent=2, default=str))
 

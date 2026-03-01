@@ -12,12 +12,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import modal
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Header, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
+from pydantic import BaseModel, Field
 
 from modal_app.volume import app, volume, web_image, VOLUME_MOUNT, RAW_DATA_PATH, PROCESSED_DATA_PATH
-from modal_app.common import CHICAGO_NEIGHBORHOODS, COMMUNITY_AREA_MAP, detect_neighborhood
+from modal_app.common import CHICAGO_NEIGHBORHOODS, COMMUNITY_AREA_MAP, detect_neighborhood, neighborhood_to_ca
 
 web_app = FastAPI(title="Alethia API", version="2.0")
 
@@ -38,7 +39,9 @@ def _load_docs(source: str, limit: int = 200) -> list[dict]:
         return docs
     for json_file in sorted(source_dir.rglob("*.json"), reverse=True)[:limit]:
         try:
-            docs.append(json.loads(json_file.read_text()))
+            parsed = json.loads(json_file.read_text())
+            if isinstance(parsed, dict):
+                docs.append(parsed)
         except Exception as e:
             print(f"_load_docs [{source}]: corrupted JSON {json_file.name}: {e}")
             continue
@@ -51,12 +54,7 @@ def _filter_by_neighborhood(docs: list[dict], neighborhood: str) -> list[dict]:
         return docs
     nb_lower = neighborhood.lower()
 
-    # Reverse lookup: find community area number for this neighborhood
-    nb_community_area = None
-    for ca_num, ca_name in COMMUNITY_AREA_MAP.items():
-        if ca_name.lower() == nb_lower:
-            nb_community_area = str(ca_num)
-            break
+    nb_community_area = neighborhood_to_ca(neighborhood)
 
     matched = []
     for d in docs:
@@ -81,64 +79,31 @@ def _filter_by_neighborhood(docs: list[dict], neighborhood: str) -> list[dict]:
     return matched
 
 
+def _load_demographics_summary() -> dict:
+    """Load pre-aggregated demographics summary (one file instead of 1300+ individual reads)."""
+    summary_path = Path(PROCESSED_DATA_PATH) / "demographics_summary.json"
+    if summary_path.exists():
+        try:
+            return json.loads(summary_path.read_text())
+        except Exception as e:
+            print(f"Failed to load demographics summary: {e}")
+    return {}
+
+
 def _aggregate_demographics(neighborhood: str) -> dict:
-    """Aggregate census demographics for a neighborhood from raw demographics docs."""
-    demos = _load_docs("demographics", limit=1500)
-    nb_lower = neighborhood.lower()
-
-    # Try to match demographics by community area or content
-    nb_community_area = None
-    for ca_num, ca_name in COMMUNITY_AREA_MAP.items():
-        if ca_name.lower() == nb_lower:
-            nb_community_area = str(ca_num)
-            break
-
-    # Collect matching tract data
-    tract_data = []
-    for d in demos:
-        meta_demos = d.get("metadata", {}).get("demographics", {})
-        if not meta_demos:
-            continue
-        geo = d.get("geo", {})
-        # Match by geo.neighborhood (set by detect_neighborhood in demographics pipeline)
-        if geo.get("neighborhood", "").lower() == nb_lower:
-            tract_data.append(meta_demos)
-            continue
-        # Match by community area number
-        if nb_community_area and str(geo.get("community_area", "")) == nb_community_area:
-            tract_data.append(meta_demos)
-            continue
-        # Match by content text
-        if nb_lower in d.get("content", "").lower()[:200]:
-            tract_data.append(meta_demos)
-
-    if not tract_data:
+    """Look up pre-aggregated census demographics for a neighborhood."""
+    summary = _load_demographics_summary()
+    if not summary:
         return {}
 
-    # Aggregate: weighted average by population for rates, sum for counts
-    total_pop = sum(t.get("total_population", 0) for t in tract_data)
-    if total_pop == 0:
-        return {}
+    nb_community_area = neighborhood_to_ca(neighborhood)
+    if nb_community_area and nb_community_area in summary.get("by_community_area", {}):
+        return summary["by_community_area"][nb_community_area]
 
-    def wavg(field: str) -> float:
-        return sum(t.get(field, 0) * t.get("total_population", 0) for t in tract_data) / total_pop
-
-    return {
-        "total_population": int(total_pop),
-        "median_household_income": round(wavg("median_household_income")),
-        "median_home_value": round(wavg("median_home_value")),
-        "median_gross_rent": round(wavg("median_gross_rent")),
-        "unemployment_rate": round(wavg("unemployment_rate"), 1),
-        "median_age": round(wavg("median_age"), 1),
-        "total_housing_units": int(sum(t.get("total_housing_units", 0) for t in tract_data)),
-        "renter_pct": round(wavg("renter_pct"), 1),
-        "bachelors_degree": int(sum(t.get("bachelors_degree", 0) for t in tract_data)),
-        "masters_degree": int(sum(t.get("masters_degree", 0) for t in tract_data)),
-        "tracts_counted": len(tract_data),
-    }
+    return {}
 
 
-def _compute_metrics(name: str, inspections: list, permits: list, licenses: list, news: list, politics: list) -> dict:
+def _compute_metrics(name: str, inspections: list, permits: list, licenses: list, news: list, politics: list, reviews: list | None = None) -> dict:
     """Compute neighborhood metrics from actual data instead of relying on pre-computed geo file."""
     total_inspections = len(inspections)
     failed = sum(1 for i in inspections if i.get("metadata", {}).get("raw_record", {}).get("results") in ("Fail", "Out of Business"))
@@ -156,6 +121,10 @@ def _compute_metrics(name: str, inspections: list, permits: list, licenses: list
     # Sentiment: placeholder based on news volume (more news = more activity = higher)
     sentiment = min(100, len(news) * 10) if news else 0
 
+    # Review rating from actual review docs
+    ratings = [r.get("metadata", {}).get("rating", 0) for r in (reviews or []) if r.get("metadata", {}).get("rating")]
+    avg_review_rating = round(sum(ratings) / len(ratings), 1) if ratings else 0.0
+
     return {
         "neighborhood": name,
         "regulatory_density": round(regulatory_density, 1),
@@ -164,8 +133,8 @@ def _compute_metrics(name: str, inspections: list, permits: list, licenses: list
         "risk_score": risk_score,
         "active_permits": len(permits),
         "crime_incidents_30d": 0,
-        "avg_review_rating": 0.0,
-        "review_count": 0,
+        "avg_review_rating": avg_review_rating,
+        "review_count": len(ratings),
     }
 
 
@@ -200,12 +169,14 @@ async def chat(request: Request):
                 span.set_attribute("chat.business_type", business_type)
                 span.set_attribute("chat.neighborhood", neighborhood)
             # Phase 1: Agent gathering (returns synthesis_messages, NOT response text)
+            from modal_app.instrumentation import inject_context
             orchestrate_query = modal.Function.from_name("alethia", "orchestrate_query")
             result = await orchestrate_query.remote.aio(
                 user_id=user_id,
                 question=question,
                 business_type=business_type,
                 target_neighborhood=neighborhood,
+                trace_context=inject_context(),
             )
 
             # Build per-agent summaries for frontend
@@ -277,15 +248,36 @@ async def chat(request: Request):
 @web_app.get("/brief/{neighborhood}")
 async def brief(neighborhood: str, business_type: str = "Restaurant"):
     """Get intelligence brief for a neighborhood."""
+    from modal_app.instrumentation import get_tracer
+    tracer = get_tracer("alethia.web")
+
+    span_ctx = tracer.start_as_current_span("brief-request") if tracer else None
+    span = span_ctx.__enter__() if span_ctx else None
     try:
+        if span:
+            span.set_attribute("openinference.span.kind", "CHAIN")
+            span.set_attribute("input.value", f"{business_type} in {neighborhood}")
+            span.set_attribute("brief.neighborhood", neighborhood)
+            span.set_attribute("brief.business_type", business_type)
+
+        from modal_app.instrumentation import inject_context
         neighborhood_intel_agent = modal.Function.from_name("alethia", "neighborhood_intel_agent")
         result = await neighborhood_intel_agent.remote.aio(
             neighborhood=neighborhood,
             business_type=business_type,
+            trace_context=inject_context(),
         )
+
+        if span:
+            span.set_attribute("output.value", json.dumps({"data_points": result.get("data_points", 0)}))
         return result
     except Exception as e:
+        if span:
+            span.set_attribute("error", str(e))
         return {"error": str(e), "neighborhood": neighborhood}
+    finally:
+        if span_ctx:
+            span_ctx.__exit__(None, None, None)
 
 
 @web_app.get("/alerts")
@@ -319,8 +311,11 @@ async def status():
     """Pipeline monitor — shows function states, doc counts, GPU status."""
     pipeline_status = {}
 
-    for source in ["news", "politics", "public_data", "demographics", "reddit", "reviews", "realestate", "traffic"]:
+    for source in ["news", "politics", "public_data", "demographics", "reddit", "reviews", "realestate", "tiktok", "traffic", "cctv"]:
         source_dir = Path(RAW_DATA_PATH) / source
+        if not source_dir.exists() and source == "traffic":
+            # Traffic processed docs live under processed/traffic
+            source_dir = Path(RAW_DATA_PATH) / "processed" / "traffic"
         if source_dir.exists():
             json_files = list(source_dir.rglob("*.json"))
             # Find most recent file
@@ -355,6 +350,7 @@ async def status():
             "h100_llm": "available",
             "t4_classifier": "available",
             "t4_sentiment": "available",
+            "t4_cctv": "available",
         },
         "costs": costs,
         "total_docs": sum(p.get("doc_count", 0) for p in pipeline_status.values()),
@@ -368,8 +364,10 @@ async def metrics():
     sources_active = 0
     neighborhoods_covered = set()
 
-    for source in ["news", "politics", "public_data", "demographics", "reddit", "reviews", "realestate", "traffic"]:
+    for source in ["news", "politics", "public_data", "demographics", "reddit", "reviews", "realestate", "tiktok", "traffic", "cctv"]:
         source_dir = Path(RAW_DATA_PATH) / source
+        if not source_dir.exists() and source == "traffic":
+            source_dir = Path(RAW_DATA_PATH) / "processed" / "traffic"
         if source_dir.exists():
             json_files = list(source_dir.rglob("*.json"))
             total_docs += len(json_files)
@@ -378,6 +376,8 @@ async def metrics():
             for jf in json_files[:100]:
                 try:
                     doc = json.loads(jf.read_text())
+                    if not isinstance(doc, dict):
+                        continue
                     nb = doc.get("geo", {}).get("neighborhood", "")
                     if nb:
                         neighborhoods_covered.add(nb)
@@ -397,8 +397,10 @@ async def metrics():
 async def sources():
     """Available data sources with counts."""
     result = {}
-    for source in ["news", "politics", "public_data", "demographics", "reddit", "reviews", "realestate", "traffic"]:
+    for source in ["news", "politics", "public_data", "demographics", "reddit", "reviews", "realestate", "tiktok", "traffic", "cctv"]:
         source_dir = Path(RAW_DATA_PATH) / source
+        if not source_dir.exists() and source == "traffic":
+            source_dir = Path(RAW_DATA_PATH) / "processed" / "traffic"
         if source_dir.exists():
             count = len(list(source_dir.rglob("*.json")))
             result[source] = {"count": count, "active": count > 0}
@@ -407,73 +409,265 @@ async def sources():
     return result
 
 
+def _load_cctv_for_neighborhood(name: str) -> dict:
+    """Load latest CCTV analysis for cameras near a neighborhood."""
+    from modal_app.common import NEIGHBORHOOD_CENTROIDS
+    import math
+
+    analysis_dir = Path(PROCESSED_DATA_PATH) / "cctv" / "analysis"
+    if not analysis_dir.exists():
+        return {"cameras": [], "avg_pedestrians": 0, "avg_vehicles": 0, "density": "unknown"}
+
+    centroid = NEIGHBORHOOD_CENTROIDS.get(name)
+    if not centroid:
+        return {"cameras": [], "avg_pedestrians": 0, "avg_vehicles": 0, "density": "unknown"}
+
+    clat, clng = centroid
+    cameras = []
+
+    # Group by camera_id, keep latest per camera
+    latest_by_cam: dict[str, dict] = {}
+    for jf in sorted(analysis_dir.glob("*.json"), reverse=True)[:200]:
+        try:
+            data = json.loads(jf.read_text())
+            cam_id = data.get("camera_id", "")
+            if cam_id in latest_by_cam:
+                continue
+            latest_by_cam[cam_id] = data
+        except Exception:
+            continue
+
+    # Filter by distance (< 5km from neighborhood centroid)
+    for cam_id, data in latest_by_cam.items():
+        # Get lat/lng from raw metadata
+        meta_dir = Path(RAW_DATA_PATH) / "cctv"
+        lat, lng = 0.0, 0.0
+        for date_dir in sorted(meta_dir.iterdir(), reverse=True) if meta_dir.exists() else []:
+            if not date_dir.is_dir() or date_dir.name == "frames":
+                continue
+            for mf in date_dir.glob(f"{cam_id}_*.json"):
+                try:
+                    meta = json.loads(mf.read_text())
+                    lat = meta.get("lat", 0)
+                    lng = meta.get("lng", 0)
+                    break
+                except Exception:
+                    continue
+            if lat:
+                break
+
+        if not lat:
+            continue
+
+        # Haversine approximation
+        R = 6371
+        dlat = math.radians(lat - clat)
+        dlon = math.radians(lng - clng)
+        a = (math.sin(dlat / 2) ** 2
+             + math.cos(math.radians(clat)) * math.cos(math.radians(lat))
+             * math.sin(dlon / 2) ** 2)
+        dist = R * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+
+        if dist < 5:
+            cameras.append({
+                "camera_id": cam_id,
+                "lat": lat,
+                "lng": lng,
+                "distance_km": round(dist, 2),
+                "pedestrians": data.get("pedestrians", 0),
+                "vehicles": data.get("vehicles", 0),
+                "bicycles": data.get("bicycles", 0),
+                "density_level": data.get("density_level", "unknown"),
+                "timestamp": data.get("timestamp", ""),
+            })
+
+    if not cameras:
+        return {"cameras": [], "avg_pedestrians": 0, "avg_vehicles": 0, "density": "unknown"}
+
+    avg_p = sum(c["pedestrians"] for c in cameras) / len(cameras)
+    avg_v = sum(c["vehicles"] for c in cameras) / len(cameras)
+    density = "high" if avg_p > 20 else "medium" if avg_p > 5 else "low"
+
+    return {
+        "cameras": cameras[:10],
+        "avg_pedestrians": round(avg_p, 1),
+        "avg_vehicles": round(avg_v, 1),
+        "density": density,
+    }
+
+
 @web_app.get("/neighborhood/{name}")
 async def neighborhood(name: str):
     """Full neighborhood data profile."""
-    # Also check COMMUNITY_AREA_MAP values for broader coverage
-    valid_names = set(n.lower() for n in CHICAGO_NEIGHBORHOODS) | set(n.lower() for n in COMMUNITY_AREA_MAP.values())
-    if name.lower() not in valid_names:
-        return JSONResponse({"error": f"Unknown neighborhood: {name}"}, status_code=404)
+    from modal_app.instrumentation import get_tracer
+    tracer = get_tracer("alethia.web")
 
-    inspections = []
-    permits = []
-    licenses = []
-    news_docs = []
-    politics_docs = []
+    span_ctx = tracer.start_as_current_span("neighborhood-profile") if tracer else None
+    span = span_ctx.__enter__() if span_ctx else None
+    try:
+        if span:
+            span.set_attribute("openinference.span.kind", "CHAIN")
+            span.set_attribute("input.value", name)
+            span.set_attribute("neighborhood.name", name)
 
-    # Load and filter public data
-    public_docs = _load_docs("public_data", limit=500)
-    nb_docs = _filter_by_neighborhood(public_docs, name)
+        # Also check COMMUNITY_AREA_MAP values for broader coverage
+        valid_names = set(n.lower() for n in CHICAGO_NEIGHBORHOODS) | set(n.lower() for n in COMMUNITY_AREA_MAP.values())
+        if name.lower() not in valid_names:
+            if span:
+                span.set_attribute("error", f"Unknown neighborhood: {name}")
+            return JSONResponse({"error": f"Unknown neighborhood: {name}"}, status_code=404)
 
-    for doc in nb_docs:
-        dataset = doc.get("metadata", {}).get("dataset", "")
-        if dataset == "food_inspections":
-            inspections.append(doc)
-        elif dataset == "building_permits":
-            permits.append(doc)
-        elif dataset == "business_licenses":
-            licenses.append(doc)
+        inspections = []
+        permits = []
+        licenses = []
+        news_docs = []
+        politics_docs = []
 
-    # Load news and politics with improved matching
-    all_news = _load_docs("news")
-    all_politics = _load_docs("politics")
+        # Load and filter public data
+        public_docs = _load_docs("public_data", limit=500)
+        nb_docs = _filter_by_neighborhood(public_docs, name)
 
-    news_docs = _filter_by_neighborhood(all_news, name)
-    politics_docs = _filter_by_neighborhood(all_politics, name)
+        for doc in nb_docs:
+            dataset = doc.get("metadata", {}).get("dataset", "")
+            if dataset == "food_inspections":
+                inspections.append(doc)
+            elif dataset == "building_permits":
+                permits.append(doc)
+            elif dataset == "business_licenses":
+                licenses.append(doc)
 
-    # If no neighborhood-specific news/politics, include recent global items
-    if not news_docs and all_news:
-        news_docs = all_news[:5]
-    if not politics_docs and all_politics:
-        politics_docs = all_politics[:5]
+        # Load news and politics with improved matching
+        all_news = _load_docs("news")
+        all_politics = _load_docs("politics")
 
-    # Compute inspection stats
-    failed = sum(1 for i in inspections if i.get("metadata", {}).get("raw_record", {}).get("results") in ("Fail", "Out of Business"))
-    passed = sum(1 for i in inspections if i.get("metadata", {}).get("raw_record", {}).get("results") == "Pass")
+        news_docs = _filter_by_neighborhood(all_news, name)
+        politics_docs = _filter_by_neighborhood(all_politics, name)
 
-    # Compute metrics from actual data
-    computed_metrics = _compute_metrics(name, inspections, permits, licenses, news_docs, politics_docs)
+        # Load additional data sources
+        all_reddit = _load_docs("reddit")
+        all_reviews = _load_docs("reviews")
+        all_realestate = _load_docs("realestate")
+        all_tiktok = _load_docs("tiktok")
+        all_traffic = _load_docs("processed/traffic")
 
-    # Load demographics
-    demographics = _aggregate_demographics(name)
+        reddit_docs = _filter_by_neighborhood(all_reddit, name)
+        reviews_docs = _filter_by_neighborhood(all_reviews, name)
+        realestate_docs = _filter_by_neighborhood(all_realestate, name)
+        tiktok_docs = _filter_by_neighborhood(all_tiktok, name)
+        traffic_docs = _filter_by_neighborhood(all_traffic, name)
 
-    return {
-        "neighborhood": name,
-        "metrics": computed_metrics,
-        "demographics": demographics,
-        "inspections": inspections[:50],
-        "permits": permits[:50],
-        "licenses": licenses[:50],
-        "news": news_docs[:20],
-        "politics": politics_docs[:20],
-        "inspection_stats": {
-            "total": len(inspections),
-            "failed": failed,
-            "passed": passed,
-        },
-        "permit_count": len(permits),
-        "license_count": len(licenses),
-    }
+        # Fallback: show some global data if no neighborhood-specific matches
+        if not reddit_docs and all_reddit:
+            reddit_docs = all_reddit[:5]
+        if not reviews_docs and all_reviews:
+            reviews_docs = all_reviews[:5]
+        if not realestate_docs and all_realestate:
+            realestate_docs = all_realestate[:5]
+
+        # If no neighborhood-specific news/politics, include recent global items
+        if not news_docs and all_news:
+            news_docs = all_news[:5]
+        if not politics_docs and all_politics:
+            politics_docs = all_politics[:5]
+
+        # Compute inspection stats
+        failed = sum(1 for i in inspections if i.get("metadata", {}).get("raw_record", {}).get("results") in ("Fail", "Out of Business"))
+        passed = sum(1 for i in inspections if i.get("metadata", {}).get("raw_record", {}).get("results") == "Pass")
+
+        # Compute metrics from actual data
+        computed_metrics = _compute_metrics(name, inspections, permits, licenses, news_docs, politics_docs, reviews_docs)
+
+        # Load demographics
+        demographics = _aggregate_demographics(name)
+
+        # Load CCTV analysis
+        cctv_analysis = _load_cctv_for_neighborhood(name)
+
+        if span:
+            span.set_attribute("output.value", json.dumps({
+                "inspections": len(inspections), "permits": len(permits),
+                "licenses": len(licenses), "news": len(news_docs),
+            }))
+            span.set_attribute("neighborhood.inspections", len(inspections))
+            span.set_attribute("neighborhood.permits", len(permits))
+            span.set_attribute("neighborhood.licenses", len(licenses))
+
+        return {
+            "neighborhood": name,
+            "metrics": computed_metrics,
+            "demographics": demographics,
+            "inspections": inspections[:50],
+            "permits": permits[:50],
+            "licenses": licenses[:50],
+            "news": news_docs[:20],
+            "politics": politics_docs[:20],
+            "reddit": reddit_docs[:20],
+            "reviews": reviews_docs[:20],
+            "realestate": realestate_docs[:10],
+            "tiktok": tiktok_docs[:10],
+            "traffic": traffic_docs[:10],
+            "cctv": cctv_analysis,
+            "inspection_stats": {
+                "total": len(inspections),
+                "failed": failed,
+                "passed": passed,
+            },
+            "permit_count": len(permits),
+            "license_count": len(licenses),
+        }
+    except Exception as e:
+        if span:
+            span.set_attribute("error", str(e))
+        raise
+    finally:
+        if span_ctx:
+            span_ctx.__exit__(None, None, None)
+
+
+# ── User settings ─────────────────────────────────────────────────────────────
+
+SETTINGS_PATH = Path(PROCESSED_DATA_PATH) / "user_settings.json"
+
+
+class _UserSettingsPayload(BaseModel):
+    location_type: str = Field(..., min_length=1)
+    neighborhood: str = Field(..., min_length=1)
+
+
+def _read_settings_store() -> dict:
+    if SETTINGS_PATH.exists():
+        try:
+            return json.loads(SETTINGS_PATH.read_text())
+        except Exception:
+            pass
+    return {}
+
+
+def _write_settings_store(store: dict) -> None:
+    SETTINGS_PATH.parent.mkdir(parents=True, exist_ok=True)
+    SETTINGS_PATH.write_text(json.dumps(store, indent=2))
+    volume.commit()
+
+
+@web_app.get("/user/settings")
+async def get_user_settings(x_user_id: str = Header(default="")):
+    if not x_user_id:
+        return JSONResponse({"error": "Missing x-user-id header"}, status_code=401)
+    store = _read_settings_store()
+    entry = store.get(x_user_id)
+    if not entry:
+        return JSONResponse({"error": "No settings found"}, status_code=404)
+    return {"user_id": x_user_id, "location_type": entry.get("location_type", ""), "neighborhood": entry.get("neighborhood", "")}
+
+
+@web_app.put("/user/settings")
+async def put_user_settings(payload: _UserSettingsPayload, x_user_id: str = Header(default="")):
+    if not x_user_id:
+        return JSONResponse({"error": "Missing x-user-id header"}, status_code=401)
+    store = _read_settings_store()
+    store[x_user_id] = {"location_type": payload.location_type, "neighborhood": payload.neighborhood}
+    _write_settings_store(store)
+    return {"user_id": x_user_id, "location_type": payload.location_type, "neighborhood": payload.neighborhood}
 
 
 # ── Standalone data endpoints (used by api.ts) ──────────────────────────────
@@ -524,34 +718,55 @@ async def licenses_list(neighborhood: str = ""):
     return licenses[:100]
 
 
+@web_app.get("/reddit")
+async def reddit_list(neighborhood: str = ""):
+    """Reddit posts, optionally filtered by neighborhood."""
+    docs = _load_docs("reddit", limit=100)
+    if neighborhood:
+        docs = _filter_by_neighborhood(docs, neighborhood)
+    return docs[:100]
+
+
+@web_app.get("/reviews")
+async def reviews_list(neighborhood: str = ""):
+    """Business reviews (Yelp + Google Places), optionally filtered."""
+    docs = _load_docs("reviews", limit=100)
+    if neighborhood:
+        docs = _filter_by_neighborhood(docs, neighborhood)
+    return docs[:100]
+
+
+@web_app.get("/realestate")
+async def realestate_list(neighborhood: str = ""):
+    """Commercial real estate listings, optionally filtered."""
+    docs = _load_docs("realestate", limit=50)
+    if neighborhood:
+        docs = _filter_by_neighborhood(docs, neighborhood)
+    return docs[:50]
+
+
+@web_app.get("/tiktok")
+async def tiktok_list(neighborhood: str = ""):
+    """TikTok videos with transcriptions, optionally filtered."""
+    docs = _load_docs("tiktok", limit=50)
+    if neighborhood:
+        docs = _filter_by_neighborhood(docs, neighborhood)
+    return docs[:50]
+
+
+@web_app.get("/traffic")
+async def traffic_list(neighborhood: str = ""):
+    """Traffic flow data (processed Documents), optionally filtered."""
+    docs = _load_docs("processed/traffic", limit=100)
+    if neighborhood:
+        docs = _filter_by_neighborhood(docs, neighborhood)
+    return docs[:100]
+
+
 def _aggregate_city_demographics() -> dict:
-    """Intentionally aggregate all tracts for city-wide statistics."""
-    demos = _load_docs("demographics", limit=1500)
-    tract_data = [d.get("metadata", {}).get("demographics", {}) for d in demos
-                  if d.get("metadata", {}).get("demographics", {}).get("total_population", 0) > 0]
-    if not tract_data:
-        return {}
-
-    total_pop = sum(t.get("total_population", 0) for t in tract_data)
-    if total_pop == 0:
-        return {}
-
-    def wavg(field: str) -> float:
-        return sum(t.get(field, 0) * t.get("total_population", 0) for t in tract_data) / total_pop
-
-    return {
-        "total_population": int(total_pop),
-        "median_household_income": round(wavg("median_household_income")),
-        "median_home_value": round(wavg("median_home_value")),
-        "median_gross_rent": round(wavg("median_gross_rent")),
-        "unemployment_rate": round(wavg("unemployment_rate"), 1),
-        "median_age": round(wavg("median_age"), 1),
-        "total_housing_units": int(sum(t.get("total_housing_units", 0) for t in tract_data)),
-        "renter_pct": round(wavg("renter_pct"), 1),
-        "bachelors_degree": int(sum(t.get("bachelors_degree", 0) for t in tract_data)),
-        "masters_degree": int(sum(t.get("masters_degree", 0) for t in tract_data)),
-        "tracts_counted": len(tract_data),
-    }
+    """Look up pre-aggregated city-wide demographics."""
+    summary = _load_demographics_summary()
+    return summary.get("city_wide", {})
 
 
 @web_app.get("/summary")
@@ -559,7 +774,7 @@ async def summary():
     """City-wide summary stats."""
     total_docs = 0
     source_counts = {}
-    for source in ["news", "politics", "public_data", "demographics", "realestate", "traffic"]:
+    for source in ["news", "politics", "public_data", "demographics", "realestate", "traffic", "cctv"]:
         source_dir = Path(RAW_DATA_PATH) / source
         if source_dir.exists():
             count = len(list(source_dir.rglob("*.json")))
@@ -575,6 +790,45 @@ async def summary():
     }
 
 
+@web_app.get("/cctv/latest")
+async def cctv_latest():
+    """Latest CCTV analysis per camera: counts, density, location."""
+    analysis_dir = Path(PROCESSED_DATA_PATH) / "cctv" / "analysis"
+    if not analysis_dir.exists():
+        return {"cameras": [], "count": 0}
+
+    latest_by_cam: dict[str, dict] = {}
+    for jf in sorted(analysis_dir.glob("*.json"), reverse=True)[:500]:
+        try:
+            data = json.loads(jf.read_text())
+            cam_id = data.get("camera_id", "")
+            if cam_id not in latest_by_cam:
+                latest_by_cam[cam_id] = data
+        except Exception:
+            continue
+
+    cameras = list(latest_by_cam.values())
+    return {"cameras": cameras, "count": len(cameras)}
+
+
+@web_app.get("/cctv/frame/{camera_id}")
+async def cctv_frame(camera_id: str):
+    """Serve latest annotated JPEG for a camera."""
+    from fastapi.responses import Response
+
+    ann_dir = Path(PROCESSED_DATA_PATH) / "cctv" / "annotated"
+    if not ann_dir.exists():
+        return JSONResponse({"error": "no annotated frames"}, status_code=404)
+
+    # Find latest annotated frame for this camera
+    frames = sorted(ann_dir.glob(f"{camera_id}_*.jpg"), reverse=True)
+    if not frames:
+        return JSONResponse({"error": f"no frames for camera {camera_id}"}, status_code=404)
+
+    frame_bytes = frames[0].read_bytes()
+    return Response(content=frame_bytes, media_type="image/jpeg")
+
+
 @web_app.get("/geo")
 async def geo():
     """GeoJSON FeatureCollection for map."""
@@ -582,6 +836,38 @@ async def geo():
     if geo_path.exists():
         return json.loads(geo_path.read_text())
     return {"type": "FeatureCollection", "features": []}
+
+
+@web_app.get("/graph")
+async def graph(page: int = 1, limit: int = 500):
+    """Proxy to Supermemory list documents for Memory Graph visualization."""
+    api_key = os.environ.get("SUPERMEMORY_API_KEY", "")
+    if not api_key:
+        return JSONResponse(
+            {"documents": [], "pagination": {"currentPage": 1, "totalPages": 0}},
+            status_code=200,
+        )
+    import httpx
+    async with httpx.AsyncClient(timeout=30) as client:
+        resp = await client.post(
+            "https://api.supermemory.ai/v3/documents/list",
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {api_key}",
+            },
+            json={
+                "page": page,
+                "limit": limit,
+                "sort": "createdAt",
+                "order": "desc",
+            },
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        # Memory Graph expects 'documents'; Supermemory list returns 'memories'
+        if "memories" in data and "documents" not in data:
+            data["documents"] = data["memories"]
+        return data
 
 
 @web_app.get("/health")

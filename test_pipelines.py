@@ -79,6 +79,19 @@ _modal.asgi_app = _identity
 _modal.Period = lambda **_kw: None
 _modal.Retries = lambda *_a, **_kw: None
 _modal.Cron = lambda *_a, **_kw: None
+_modal.concurrent = _identity
+
+class _FakeDict:
+    """Fake modal.Dict — in-memory dict with .from_name() constructor."""
+    _store: dict = {}
+    @staticmethod
+    def from_name(*_a, **_kw): return _FakeDict()
+    def __getitem__(self, key): return self._store[key]
+    def __setitem__(self, key, value): self._store[key] = value
+    def keys(self): return iter(self._store.keys())
+    def get(self, key): return self._store.get(key)
+
+_modal.Dict = _FakeDict
 
 sys.modules["modal"] = _modal
 
@@ -120,6 +133,7 @@ for _sub in ("data/raw", "data/cache", "data/dedup", "data/processed"):
 from modal_app.pipelines import news, reddit, politics, public_data  # noqa: E402
 from modal_app.pipelines import demographics, federal_register        # noqa: E402
 from modal_app.pipelines import realestate, reviews                   # noqa: E402
+from modal_app.pipelines import cctv                                  # noqa: E402
 
 # ── Reporting helpers ─────────────────────────────────────────────────────────
 
@@ -183,13 +197,14 @@ async def run_all():
 
     await _run("NEWS (RSS)", news._fetch_all_rss)
     await _run("NEWS (Google RSS)", news._fetch_google_news_rss)
-    await _run("REDDIT (JSON)", reddit._fetch_all_json)
+    await _run("REDDIT (RSS)", reddit._fetch_all_rss)
     await _run("POLITICS (Legislation)", politics._fetch_legislation_rest)
     await _run("POLITICS (Events)", politics._fetch_events)
     await _run("PUBLIC DATA (no token)", public_data._fetch_all_without_token)
     await _run("DEMOGRAPHICS (Census)", demographics._fetch_census)
     await _run("FEDERAL REGISTER", federal_register._fetch_federal_register)
     await _run("REAL ESTATE (placeholders)", realestate._create_placeholder_listings)
+    await _run("CCTV (IDOT cameras)", cctv._fetch_idot_cameras)
 
     # ── API-key gated ─────────────────────────────────────────────────────
 

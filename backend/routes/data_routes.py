@@ -8,11 +8,49 @@ import os
 from pathlib import Path
 from typing import Optional
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Depends, HTTPException, Header, Query
+from sqlalchemy.orm import Session
+from pydantic import BaseModel, Field
+
+from database import get_db
+from models import UserProfile, QueryResult
+from auth import extract_user_id
 
 router = APIRouter()
 
 DATA_DIR = Path(__file__).parent.parent / "data"
+
+
+class UserProfileSchema(BaseModel):
+    business_type: Optional[str] = None
+    neighborhood: Optional[str] = None
+
+    class Config:
+        from_attributes = True
+
+
+class UserProfileResponse(UserProfileSchema):
+    clerk_user_id: str
+    created_at: str
+    updated_at: str
+
+
+class UserQueryCreateSchema(BaseModel):
+    query_text: str = Field(..., min_length=1, max_length=1000)
+    business_type: str = Field(..., min_length=1, max_length=255)
+    neighborhood: str = Field(..., min_length=1, max_length=255)
+
+
+class UserQueryResponse(BaseModel):
+    id: int
+    clerk_user_id: str
+    query_text: str
+    business_type: str
+    neighborhood: str
+    created_at: str
+
+    class Config:
+        from_attributes = True
 
 
 def _load_all(source: str) -> list[dict]:
@@ -61,6 +99,129 @@ def _filter_by_type(docs: list[dict], dataset: str) -> list[dict]:
     ]
 
 
+@router.get("/user/profile", response_model=UserProfileResponse)
+async def get_user_profile(
+    db: Session = Depends(get_db),
+    user_id: str = Depends(extract_user_id),
+):
+    """Get user's saved profile settings."""
+    profile = db.query(UserProfile).filter(UserProfile.clerk_user_id == user_id).first()
+    if not profile:
+        raise HTTPException(status_code=404, detail="No profile found for user")
+    return {
+        "clerk_user_id": profile.clerk_user_id,
+        "business_type": profile.business_type,
+        "neighborhood": profile.neighborhood,
+        "created_at": profile.created_at.isoformat(),
+        "updated_at": profile.updated_at.isoformat(),
+    }
+
+
+@router.put("/user/profile", response_model=UserProfileResponse)
+async def update_user_profile(
+    payload: UserProfileSchema,
+    db: Session = Depends(get_db),
+    user_id: str = Depends(extract_user_id),
+):
+    """Save or update user's profile settings."""
+    profile = db.query(UserProfile).filter(UserProfile.clerk_user_id == user_id).first()
+    if not profile:
+        profile = UserProfile(clerk_user_id=user_id)
+        db.add(profile)
+    
+    if payload.business_type is not None:
+        profile.business_type = payload.business_type
+    if payload.neighborhood is not None:
+        profile.neighborhood = payload.neighborhood
+    
+    db.commit()
+    db.refresh(profile)
+    
+    return {
+        "clerk_user_id": profile.clerk_user_id,
+        "business_type": profile.business_type,
+        "neighborhood": profile.neighborhood,
+        "created_at": profile.created_at.isoformat(),
+        "updated_at": profile.updated_at.isoformat(),
+    }
+
+
+@router.post("/user/queries", response_model=UserQueryResponse)
+async def create_user_query(
+    payload: UserQueryCreateSchema,
+    db: Session = Depends(get_db),
+    user_id: str = Depends(extract_user_id),
+):
+    """Persist a user's query to query history."""
+    query = QueryResult(
+        clerk_user_id=user_id,
+        query_text=payload.query_text,
+        business_type=payload.business_type,
+        neighborhood=payload.neighborhood,
+        result_summary=None,
+    )
+    db.add(query)
+    db.commit()
+    db.refresh(query)
+
+    return {
+        "id": query.id,
+        "clerk_user_id": query.clerk_user_id,
+        "query_text": query.query_text,
+        "business_type": query.business_type,
+        "neighborhood": query.neighborhood,
+        "created_at": query.created_at.isoformat(),
+    }
+
+
+@router.get("/user/queries", response_model=list[UserQueryResponse])
+async def get_user_queries(
+    limit: int = Query(10, ge=1, le=50),
+    db: Session = Depends(get_db),
+    user_id: str = Depends(extract_user_id),
+):
+    """Get most recent queries for a user."""
+    queries = (
+        db.query(QueryResult)
+        .filter(QueryResult.clerk_user_id == user_id)
+        .order_by(QueryResult.created_at.desc())
+        .limit(limit)
+        .all()
+    )
+
+    return [
+        {
+            "id": query.id,
+            "clerk_user_id": query.clerk_user_id,
+            "query_text": query.query_text,
+            "business_type": query.business_type,
+            "neighborhood": query.neighborhood,
+            "created_at": query.created_at.isoformat(),
+        }
+        for query in queries
+    ]
+
+
+# Legacy endpoints for backward compatibility
+@router.get("/user/settings", response_model=UserProfileResponse)
+async def get_user_settings(
+    db: Session = Depends(get_db),
+    user_id: str = Depends(extract_user_id),
+):
+    """Get saved query settings for a user (legacy, use /user/profile)."""
+    return await get_user_profile(db, user_id)
+
+
+@router.put("/user/settings", response_model=UserProfileResponse)
+async def put_user_settings(
+    payload: UserProfileSchema,
+    db: Session = Depends(get_db),
+    user_id: str = Depends(extract_user_id),
+):
+    """Save last queried settings for a user (legacy, use /user/profile)."""
+    return await update_user_profile(payload, db, user_id)
+
+
 @router.get("/sources")
 async def get_sources():
     """Return available data sources with counts."""
@@ -88,6 +249,39 @@ async def get_geo():
         with open(geo_path) as f:
             return json.load(f)
     return {"type": "FeatureCollection", "features": []}
+
+
+def _empty_graph_response():
+    return {"documents": [], "pagination": {"currentPage": 1, "totalPages": 0}}
+
+
+@router.get("/graph")
+async def get_graph(page: int = Query(1, ge=1), limit: int = Query(500, ge=1, le=500)):
+    """Proxy to Supermemory list documents for Memory Graph. Requires SUPERMEMORY_API_KEY."""
+    api_key = os.environ.get("SUPERMEMORY_API_KEY", "")
+    if not api_key:
+        return _empty_graph_response()
+
+    try:
+        import httpx
+        async with httpx.AsyncClient(timeout=30) as client:
+            resp = await client.post(
+                "https://api.supermemory.ai/v3/documents/list",
+                headers={
+                    "Content-Type": "application/json",
+                    "Authorization": f"Bearer {api_key}",
+                },
+                json={"page": page, "limit": limit, "sort": "createdAt", "order": "desc"},
+            )
+            if resp.status_code in (401, 403):
+                return _empty_graph_response()
+            resp.raise_for_status()
+            data = resp.json()
+            if "memories" in data and "documents" not in data:
+                data["documents"] = data["memories"]
+            return data
+    except Exception:
+        return _empty_graph_response()
 
 
 @router.get("/summary")

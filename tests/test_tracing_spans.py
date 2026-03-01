@@ -266,6 +266,130 @@ class TestChatSpans:
         assert spans[0].attributes["error"] == "orchestration timeout"
 
 
+# ── Brief endpoint span tests ────────────────────────────────────────────────
+
+
+class TestBriefSpans:
+    def test_brief_request_creates_chain_span(self, span_capture):
+        provider, exporter = span_capture
+        tracer = provider.get_tracer("test.web")
+
+        span_ctx = tracer.start_as_current_span("brief-request")
+        span = span_ctx.__enter__()
+        try:
+            span.set_attribute("openinference.span.kind", "CHAIN")
+            span.set_attribute("input.value", "Restaurant in Logan Square")
+            span.set_attribute("brief.neighborhood", "Logan Square")
+            span.set_attribute("brief.business_type", "Restaurant")
+            span.set_attribute("output.value", json.dumps({"data_points": 42}))
+        finally:
+            span_ctx.__exit__(None, None, None)
+
+        spans = exporter.get_finished_spans()
+        assert len(spans) == 1
+        s = spans[0]
+        assert s.name == "brief-request"
+        assert s.attributes["openinference.span.kind"] == "CHAIN"
+        assert s.attributes["brief.neighborhood"] == "Logan Square"
+        assert s.attributes["brief.business_type"] == "Restaurant"
+        assert "output.value" in s.attributes
+
+    def test_brief_error_records_in_span(self, span_capture):
+        provider, exporter = span_capture
+        tracer = provider.get_tracer("test.web")
+
+        span_ctx = tracer.start_as_current_span("brief-request")
+        span = span_ctx.__enter__()
+        try:
+            span.set_attribute("openinference.span.kind", "CHAIN")
+            span.set_attribute("input.value", "Restaurant in Unknown")
+            span.set_attribute("brief.neighborhood", "Unknown")
+            span.set_attribute("brief.business_type", "Restaurant")
+            span.set_attribute("error", "agent timeout")
+        finally:
+            span_ctx.__exit__(None, None, None)
+
+        spans = exporter.get_finished_spans()
+        assert spans[0].attributes["error"] == "agent timeout"
+
+
+# ── Neighborhood endpoint span tests ────────────────────────────────────────
+
+
+class TestNeighborhoodSpans:
+    def test_neighborhood_profile_creates_chain_span(self, span_capture):
+        provider, exporter = span_capture
+        tracer = provider.get_tracer("test.web")
+
+        span_ctx = tracer.start_as_current_span("neighborhood-profile")
+        span = span_ctx.__enter__()
+        try:
+            span.set_attribute("openinference.span.kind", "CHAIN")
+            span.set_attribute("input.value", "Pilsen")
+            span.set_attribute("neighborhood.name", "Pilsen")
+            span.set_attribute("neighborhood.inspections", 15)
+            span.set_attribute("neighborhood.permits", 8)
+            span.set_attribute("neighborhood.licenses", 22)
+            span.set_attribute("output.value", json.dumps({
+                "inspections": 15, "permits": 8, "licenses": 22, "news": 5,
+            }))
+        finally:
+            span_ctx.__exit__(None, None, None)
+
+        spans = exporter.get_finished_spans()
+        assert len(spans) == 1
+        s = spans[0]
+        assert s.name == "neighborhood-profile"
+        assert s.attributes["openinference.span.kind"] == "CHAIN"
+        assert s.attributes["neighborhood.name"] == "Pilsen"
+        assert s.attributes["neighborhood.inspections"] == 15
+        assert s.attributes["neighborhood.permits"] == 8
+        assert s.attributes["neighborhood.licenses"] == 22
+
+    def test_neighborhood_profile_records_error_for_unknown(self, span_capture):
+        provider, exporter = span_capture
+        tracer = provider.get_tracer("test.web")
+
+        span_ctx = tracer.start_as_current_span("neighborhood-profile")
+        span = span_ctx.__enter__()
+        try:
+            span.set_attribute("openinference.span.kind", "CHAIN")
+            span.set_attribute("input.value", "Atlantis")
+            span.set_attribute("neighborhood.name", "Atlantis")
+            span.set_attribute("error", "Unknown neighborhood: Atlantis")
+        finally:
+            span_ctx.__exit__(None, None, None)
+
+        spans = exporter.get_finished_spans()
+        assert spans[0].attributes["error"] == "Unknown neighborhood: Atlantis"
+
+    def test_neighborhood_profile_records_all_data_counts(self, span_capture):
+        provider, exporter = span_capture
+        tracer = provider.get_tracer("test.web")
+
+        span_ctx = tracer.start_as_current_span("neighborhood-profile")
+        span = span_ctx.__enter__()
+        try:
+            span.set_attribute("openinference.span.kind", "CHAIN")
+            span.set_attribute("input.value", "Loop")
+            span.set_attribute("neighborhood.name", "Loop")
+            span.set_attribute("neighborhood.inspections", 0)
+            span.set_attribute("neighborhood.permits", 0)
+            span.set_attribute("neighborhood.licenses", 0)
+            span.set_attribute("output.value", json.dumps({
+                "inspections": 0, "permits": 0, "licenses": 0, "news": 0,
+            }))
+        finally:
+            span_ctx.__exit__(None, None, None)
+
+        spans = exporter.get_finished_spans()
+        s = spans[0]
+        # Zero counts should still be recorded
+        assert s.attributes["neighborhood.inspections"] == 0
+        assert s.attributes["neighborhood.permits"] == 0
+        assert s.attributes["neighborhood.licenses"] == 0
+
+
 # ── Span nesting / no-op behavior tests ──────────────────────────────────────
 
 
@@ -302,6 +426,42 @@ class TestSpanBehavior:
         child = [s for s in spans if s.name == "child"][0]
         parent = [s for s in spans if s.name == "parent"][0]
 
+        assert child.parent.span_id == parent.context.span_id
+
+    def test_cross_process_context_propagation(self, span_capture):
+        """Verify inject/extract creates parent-child across processes."""
+        provider, exporter = span_capture
+
+        from opentelemetry.trace import set_tracer_provider
+        from opentelemetry.propagate import inject, extract
+
+        set_tracer_provider(provider)
+        tracer = provider.get_tracer("test.propagation")
+
+        with tracer.start_as_current_span("chat-request") as parent_span:
+            parent_span.set_attribute("openinference.span.kind", "CHAIN")
+
+            # Inject — this is what web.py does before calling .remote()
+            carrier: dict[str, str] = {}
+            inject(carrier)
+
+            assert "traceparent" in carrier  # W3C header must be present
+
+        # Simulate: agents.py receives carrier, extracts, creates child span
+        extracted_ctx = extract(carrier=carrier)
+
+        with tracer.start_as_current_span("orchestrate-query", context=extracted_ctx) as child_span:
+            child_span.set_attribute("openinference.span.kind", "CHAIN")
+
+        spans = exporter.get_finished_spans()
+        assert len(spans) == 2
+
+        parent = [s for s in spans if s.name == "chat-request"][0]
+        child = [s for s in spans if s.name == "orchestrate-query"][0]
+
+        # Same trace ID = same trace in Arize
+        assert child.context.trace_id == parent.context.trace_id
+        # Child's parent is the parent span
         assert child.parent.span_id == parent.context.span_id
 
     def test_all_span_kinds_are_valid(self, span_capture):

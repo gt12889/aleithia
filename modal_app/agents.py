@@ -5,14 +5,16 @@ Supermemory, then synthesizes findings via LLM. Uses .spawn() fan-out pattern.
 
 Modal features: .spawn(), @modal.function
 """
+import asyncio
 import json
 import os
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 
 import modal
 
-from modal_app.common import COMMUNITY_AREA_MAP
+from modal_app.common import compute_freshness, neighborhood_to_ca
 from modal_app.volume import app, volume, base_image, RAW_DATA_PATH, PROCESSED_DATA_PATH
 
 ADJACENT_NEIGHBORHOODS = {
@@ -33,6 +35,103 @@ ADJACENT_NEIGHBORHOODS = {
     "Bridgeport": ["Pilsen", "Chinatown"],
 }
 
+BUSINESS_KEYWORDS = {
+    "restaurant": ["food", "restaurant", "dining", "liquor", "health inspection", "food service"],
+    "retail": ["retail", "storefront", "merchandise", "commercial", "shopping"],
+    "bar": ["liquor", "tavern", "bar", "alcohol", "nightlife"],
+    "cafe": ["coffee", "cafe", "bakery", "food service"],
+    "gym": ["fitness", "gym", "health club", "recreation"],
+}
+
+
+async def _fetch_legistar_inline(business_type: str, limit: int = 30) -> list[dict]:
+    """Fetch live Chicago City Council legislation from Legistar REST API."""
+    import httpx
+
+    keywords = BUSINESS_KEYWORDS.get(business_type.lower(), [business_type.lower()])
+    keywords += ["zoning", "license", "permit", "ordinance"]
+
+    results = []
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.get(
+                "https://webapi.legistar.com/v1/chicago/matters",
+                params={
+                    "$top": 100,
+                    "$orderby": "MatterLastModifiedUtc desc",
+                    "$filter": "MatterStatusName ne 'Withdrawn'",
+                },
+            )
+            resp.raise_for_status()
+            matters = resp.json()
+
+            for matter in matters:
+                title = (matter.get("MatterTitle") or "").lower()
+                body = (matter.get("MatterBodyName") or "").lower()
+                text = f"{title} {body}"
+                if any(kw in text for kw in keywords):
+                    results.append({
+                        "id": f"legistar-{matter.get('MatterId', '')}",
+                        "title": matter.get("MatterTitle", ""),
+                        "type": matter.get("MatterTypeName", ""),
+                        "status": matter.get("MatterStatusName", ""),
+                        "date": matter.get("MatterLastModifiedUtc", ""),
+                        "body": matter.get("MatterBodyName", ""),
+                        "source": "legistar_live",
+                    })
+                    if len(results) >= limit:
+                        break
+    except Exception as e:
+        print(f"Legistar inline fetch failed: {e}")
+
+    return results
+
+
+async def _fetch_federal_register_inline(business_type: str, since_days: int = 7) -> list[dict]:
+    """Fetch live federal regulations from Federal Register API for SBA/FDA/OSHA/EPA."""
+    import httpx
+    from datetime import timedelta
+
+    keywords = BUSINESS_KEYWORDS.get(business_type.lower(), [business_type.lower()])
+    agencies = ["small-business-administration", "food-and-drug-administration",
+                "occupational-safety-and-health-administration", "environmental-protection-agency"]
+
+    since = (datetime.now(timezone.utc) - timedelta(days=since_days)).strftime("%Y-%m-%d")
+    results = []
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.get(
+                "https://www.federalregister.gov/api/v1/documents.json",
+                params={
+                    "conditions[agencies][]": agencies,
+                    "conditions[publication_date][gte]": since,
+                    "per_page": 50,
+                    "order": "newest",
+                },
+            )
+            resp.raise_for_status()
+            data = resp.json()
+
+            for doc in data.get("results", []):
+                title = (doc.get("title") or "").lower()
+                abstract = (doc.get("abstract") or "").lower()
+                text = f"{title} {abstract}"
+                if any(kw in text for kw in keywords + ["food", "health", "safety", "labor"]):
+                    results.append({
+                        "id": f"fedreg-{doc.get('document_number', '')}",
+                        "title": doc.get("title", ""),
+                        "type": doc.get("type", ""),
+                        "agency": (doc.get("agencies") or [{}])[0].get("name", ""),
+                        "date": doc.get("publication_date", ""),
+                        "url": doc.get("html_url", ""),
+                        "source": "federal_register_live",
+                    })
+    except Exception as e:
+        print(f"Federal Register inline fetch failed: {e}")
+
+    return results
+
+
 SYNTHESIS_SYSTEM_PROMPT = """You are synthesizing intelligence reports from multiple neighborhood agents.
 Each agent independently analyzed a different Chicago neighborhood. Your job is to:
 
@@ -41,10 +140,16 @@ Each agent independently analyzed a different Chicago neighborhood. Your job is 
 3. Produce a clear recommendation with confidence level
 4. Compare the target neighborhood against comparison neighborhoods
 5. Cite specific data points from each agent's report
+6. Analyze social media trends: If TikTok or Reddit data is present, extract actionable insights —
+   what content creators are featuring, trending hashtags, community sentiment, viral topics,
+   and what this signals about consumer demand and foot traffic patterns.
+7. Incorporate review data: If business reviews are present, analyze average ratings, review velocity,
+   and what customers are saying about competitors in the area.
 
 Format your response with clear sections:
 - Executive Summary (2-3 sentences)
 - Target Neighborhood Analysis
+- Social & Community Pulse (TikTok trends, Reddit discussions, review sentiment — skip if no data)
 - Comparison Neighborhoods
 - Key Risks
 - Key Opportunities
@@ -57,14 +162,15 @@ Format your response with clear sections:
     secrets=[modal.Secret.from_name("alethia-secrets"), modal.Secret.from_name("arize-secrets")],
     timeout=120,
 )
-async def neighborhood_intel_agent(neighborhood: str, business_type: str, focus_areas: list[str] | None = None) -> dict:
+async def neighborhood_intel_agent(neighborhood: str, business_type: str, focus_areas: list[str] | None = None, trace_context: dict | None = None) -> dict:
     """Query-time intelligence agent for a single neighborhood.
 
     Gathers data from local volume + Supermemory to build a neighborhood brief.
     """
-    from modal_app.instrumentation import init_tracing, get_tracer
+    from modal_app.instrumentation import init_tracing, get_tracer, extract_context
     init_tracing()
     tracer = get_tracer("alethia.agents")
+    parent_ctx = extract_context(trace_context)
 
     if focus_areas is None:
         focus_areas = ["permits", "sentiment", "competition", "safety", "demographics"]
@@ -74,10 +180,11 @@ async def neighborhood_intel_agent(neighborhood: str, business_type: str, focus_
         "business_type": business_type,
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "findings": {},
+        "freshness": {},
         "data_points": 0,
     }
 
-    span_ctx = tracer.start_as_current_span("neighborhood-intel-agent") if tracer else None
+    span_ctx = tracer.start_as_current_span("neighborhood-intel-agent", context=parent_ctx) if tracer else None
     span = span_ctx.__enter__() if span_ctx else None
     try:
         if span:
@@ -86,15 +193,10 @@ async def neighborhood_intel_agent(neighborhood: str, business_type: str, focus_
             span.set_attribute("agent.neighborhood", neighborhood)
             span.set_attribute("agent.business_type", business_type)
 
-        # Pre-compute community area for matching
-        nb_community_area = None
-        for ca_num, ca_name in COMMUNITY_AREA_MAP.items():
-            if ca_name.lower() == neighborhood.lower():
-                nb_community_area = str(ca_num)
-                break
+        nb_community_area = neighborhood_to_ca(neighborhood)
 
         # Read local volume data
-        for source in ["public_data", "news", "politics", "demographics"]:
+        for source in ["public_data", "news", "politics", "demographics", "reddit", "reviews", "realestate", "tiktok", "cctv"]:
             source_dir = Path(RAW_DATA_PATH) / source
             if not source_dir.exists():
                 continue
@@ -103,6 +205,8 @@ async def neighborhood_intel_agent(neighborhood: str, business_type: str, focus_
             for json_file in sorted(source_dir.rglob("*.json"), reverse=True)[:100]:
                 try:
                     doc = json.loads(json_file.read_text())
+                    if not isinstance(doc, dict):
+                        continue
                     geo = doc.get("geo", {})
                     doc_neighborhood = geo.get("neighborhood", "")
                     doc_ca = geo.get("community_area", "")
@@ -114,11 +218,53 @@ async def neighborhood_intel_agent(neighborhood: str, business_type: str, focus_
                     continue
 
             if docs:
+                # Compute freshness from newest doc timestamp
+                newest_ts = None
+                for d in docs:
+                    ts = d.get("timestamp")
+                    if ts and (newest_ts is None or ts > newest_ts):
+                        newest_ts = ts
+                source_freshness = compute_freshness(timestamp_str=newest_ts) if newest_ts else compute_freshness()
+
                 report["findings"][source] = {
                     "count": len(docs),
                     "samples": [{"title": d.get("title", ""), "content": d.get("content", "")[:200]} for d in docs[:5]],
+                    "freshness": source_freshness,
                 }
+                report["freshness"][source] = source_freshness
                 report["data_points"] += len(docs)
+
+        # Traffic: read from processed path (Documents, not raw API dicts)
+        traffic_dir = Path(RAW_DATA_PATH) / "processed" / "traffic"
+        if traffic_dir.exists():
+            traffic_docs = []
+            for json_file in sorted(traffic_dir.rglob("*.json"), reverse=True)[:50]:
+                try:
+                    doc = json.loads(json_file.read_text())
+                    if not isinstance(doc, dict) or "geo" not in doc:
+                        continue
+                    geo = doc.get("geo", {})
+                    if geo.get("neighborhood", "").lower() == neighborhood.lower():
+                        traffic_docs.append(doc)
+                    elif nb_community_area and geo.get("community_area") == nb_community_area:
+                        traffic_docs.append(doc)
+                except Exception:
+                    continue
+            if traffic_docs:
+                newest_ts = None
+                for d in traffic_docs:
+                    ts = d.get("timestamp")
+                    if ts and (newest_ts is None or ts > newest_ts):
+                        newest_ts = ts
+                traffic_freshness = compute_freshness(timestamp_str=newest_ts) if newest_ts else compute_freshness()
+
+                report["findings"]["traffic"] = {
+                    "count": len(traffic_docs),
+                    "samples": [{"title": d.get("title", ""), "content": d.get("content", "")[:200]} for d in traffic_docs[:5]],
+                    "freshness": traffic_freshness,
+                }
+                report["freshness"]["traffic"] = traffic_freshness
+                report["data_points"] += len(traffic_docs)
 
         # Read enriched data (classified)
         enriched_dir = Path(PROCESSED_DATA_PATH) / "enriched"
@@ -156,6 +302,31 @@ async def neighborhood_intel_agent(neighborhood: str, business_type: str, focus_
                     sorted(label_counts.items(), key=lambda x: x[1], reverse=True)[:5]
                 )
 
+        # Extract foot traffic metrics from CCTV data
+        if "cctv" in report["findings"]:
+            cctv_samples = report["findings"]["cctv"].get("samples", [])
+            total_peds = 0
+            total_vehs = 0
+            cam_count = 0
+            for sample in cctv_samples:
+                content = sample.get("content", "")
+                ped_match = re.search(r"(\d+) pedestrians", content)
+                veh_match = re.search(r"(\d+) vehicles", content)
+                if ped_match:
+                    total_peds += int(ped_match.group(1))
+                    cam_count += 1
+                if veh_match:
+                    total_vehs += int(veh_match.group(1))
+
+            if cam_count > 0:
+                avg_peds = total_peds / cam_count
+                report["findings"]["foot_traffic"] = {
+                    "avg_pedestrians": round(avg_peds, 1),
+                    "avg_vehicles": round(total_vehs / cam_count, 1),
+                    "density_level": "high" if avg_peds > 20 else "medium" if avg_peds > 5 else "low",
+                    "camera_count": cam_count,
+                }
+
         # Query Supermemory for additional context
         api_key = os.environ.get("SUPERMEMORY_API_KEY", "")
         if api_key:
@@ -164,7 +335,7 @@ async def neighborhood_intel_agent(neighborhood: str, business_type: str, focus_
                 sm = SupermemoryClient(api_key)
                 results = await sm.search(
                     query=f"{business_type} in {neighborhood} Chicago permits zoning competition",
-                    container_tags=["chicago_data", f"chicago_news", f"chicago_public_data"],
+                    container_tags=["chicago_data", "chicago_news", "chicago_public_data", "chicago_reddit", "chicago_reviews", "chicago_politics", "chicago_cctv"],
                     limit=10,
                 )
                 report["findings"]["supermemory"] = {
@@ -194,32 +365,26 @@ async def neighborhood_intel_agent(neighborhood: str, business_type: str, focus_
     secrets=[modal.Secret.from_name("alethia-secrets"), modal.Secret.from_name("arize-secrets")],
     timeout=120,
 )
-async def regulatory_agent(business_type: str) -> dict:
-    """Scans local + federal regulations relevant to business type."""
-    from modal_app.instrumentation import init_tracing, get_tracer
+async def regulatory_agent(business_type: str, trace_context: dict | None = None) -> dict:
+    """Scans live APIs + cached volume data for regulations relevant to business type.
+
+    Fetches Legistar + Federal Register inline (~3-5s), deduplicates against
+    volume cache, writes live results back to volume for dashboard freshness.
+    """
+    from modal_app.instrumentation import init_tracing, get_tracer, extract_context
     init_tracing()
     tracer = get_tracer("alethia.agents")
-
-    BUSINESS_KEYWORDS = {
-        "restaurant": ["food", "health", "safety", "labor", "kitchen", "sanitation"],
-        "retail": ["commerce", "consumer", "safety", "trade", "merchandise"],
-        "bar": ["liquor", "alcohol", "safety", "noise", "entertainment"],
-        "cafe": ["food", "health", "safety", "beverage", "coffee"],
-        "grocery": ["food", "health", "safety", "produce", "retail"],
-        "salon": ["cosmetology", "health", "safety", "beauty"],
-        "fitness": ["health", "safety", "recreation", "gym"],
-    }
-    keywords = BUSINESS_KEYWORDS.get(business_type.lower(), ["business", "safety", "labor", "health"])
-    keywords.append(business_type.lower())
+    parent_ctx = extract_context(trace_context)
 
     report = {
         "business_type": business_type,
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "regulations": [],
+        "freshness": {},
         "data_points": 0,
     }
 
-    span_ctx = tracer.start_as_current_span("regulatory-agent") if tracer else None
+    span_ctx = tracer.start_as_current_span("regulatory-agent", context=parent_ctx) if tracer else None
     span = span_ctx.__enter__() if span_ctx else None
     try:
         if span:
@@ -227,41 +392,128 @@ async def regulatory_agent(business_type: str) -> dict:
             span.set_attribute("input.value", business_type)
             span.set_attribute("agent.business_type", business_type)
 
-        # Scan politics data for regulatory items
-        politics_dir = Path(RAW_DATA_PATH) / "politics"
-        if politics_dir.exists():
-            for json_file in sorted(politics_dir.rglob("*.json"), reverse=True)[:50]:
+        # 1. Fetch live data from both APIs concurrently
+        live_legistar, live_federal = [], []
+        try:
+            live_legistar, live_federal = await asyncio.gather(
+                _fetch_legistar_inline(business_type),
+                _fetch_federal_register_inline(business_type),
+            )
+        except Exception as e:
+            print(f"Live regulatory fetch failed, falling back to volume: {e}")
+
+        live_ids = set()
+
+        # Add live Legistar results
+        for item in live_legistar:
+            live_ids.add(item["id"])
+            report["regulations"].append({
+                "title": item["title"],
+                "type": item.get("type", ""),
+                "status": item.get("status", ""),
+                "date": item.get("date", ""),
+                "relevance": "direct",
+                "freshness": "live",
+            })
+            report["data_points"] += 1
+
+        # Add live Federal Register results
+        for item in live_federal:
+            live_ids.add(item["id"])
+            report["regulations"].append({
+                "title": item["title"],
+                "type": item.get("type", "federal"),
+                "agency": item.get("agency", ""),
+                "date": item.get("date", ""),
+                "url": item.get("url", ""),
+                "relevance": "federal",
+                "freshness": "live",
+            })
+            report["data_points"] += 1
+
+        report["freshness"]["legistar"] = {
+            "source": "live_api",
+            "count": len(live_legistar),
+            "freshness_label": "fresh" if live_legistar else "unavailable",
+        }
+        report["freshness"]["federal_register"] = {
+            "source": "live_api",
+            "count": len(live_federal),
+            "freshness_label": "fresh" if live_federal else "unavailable",
+        }
+
+        # 2. Read volume data as fallback / supplement (dedup against live)
+        for source_name, source_dir_name in [("politics", "politics"), ("federal", "federal_register")]:
+            source_dir = Path(RAW_DATA_PATH) / source_dir_name
+            if not source_dir.exists():
+                continue
+
+            newest_ts = None
+            for json_file in sorted(source_dir.rglob("*.json"), reverse=True)[:50]:
                 try:
                     doc = json.loads(json_file.read_text())
+                    doc_id = doc.get("id", "")
+                    if doc_id in live_ids:
+                        continue  # Already have live version
                     content = f"{doc.get('title', '')} {doc.get('content', '')}".lower()
-                    if any(kw in content for kw in [business_type.lower(), "zoning", "license", "permit", "ordinance"]):
+                    keywords = [business_type.lower(), "zoning", "license", "permit", "ordinance"]
+                    if source_name == "federal":
+                        keywords += ["food", "health", "safety", "labor"]
+                    if any(kw in content for kw in keywords):
+                        ts = doc.get("timestamp")
+                        if ts and (newest_ts is None or ts > newest_ts):
+                            newest_ts = ts
                         report["regulations"].append({
                             "title": doc.get("title", ""),
-                            "type": doc.get("metadata", {}).get("matter_type", ""),
+                            "type": doc.get("metadata", {}).get("matter_type", "") if source_name == "politics" else "federal",
                             "status": doc.get("metadata", {}).get("status", ""),
+                            "agency": doc.get("metadata", {}).get("agency", "") if source_name == "federal" else "",
                             "relevance": "direct" if business_type.lower() in content else "related",
+                            "freshness": "cached",
                         })
                         report["data_points"] += 1
                 except Exception:
                     continue
 
-        # Scan federal register data if available
-        federal_dir = Path(RAW_DATA_PATH) / "federal_register"
-        if federal_dir.exists():
-            for json_file in sorted(federal_dir.rglob("*.json"), reverse=True)[:30]:
-                try:
-                    doc = json.loads(json_file.read_text())
-                    content = f"{doc.get('title', '')} {doc.get('content', '')}".lower()
-                    if any(kw in content for kw in keywords):
-                        report["regulations"].append({
-                            "title": doc.get("title", ""),
-                            "type": "federal",
-                            "agency": doc.get("metadata", {}).get("agency", ""),
-                            "relevance": "federal",
-                        })
-                        report["data_points"] += 1
-                except Exception:
-                    continue
+            if newest_ts:
+                cached_freshness = compute_freshness(timestamp_str=newest_ts)
+                report["freshness"][f"{source_name}_cached"] = cached_freshness
+
+        # 3. Write live data back to volume (fire-and-forget, benefits dashboard)
+        if live_legistar or live_federal:
+            try:
+                from modal_app.common import Document, SourceType
+                today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+
+                for item in live_legistar:
+                    doc = Document(
+                        id=item["id"],
+                        source=SourceType.POLITICS,
+                        title=item["title"],
+                        content=f"{item.get('type', '')} — {item.get('status', '')}",
+                        url="",
+                        metadata={"matter_type": item.get("type", ""), "status": item.get("status", ""), "source": "legistar_live"},
+                    )
+                    out_dir = Path(RAW_DATA_PATH) / "politics" / today
+                    out_dir.mkdir(parents=True, exist_ok=True)
+                    (out_dir / f"{doc.id}.json").write_text(doc.model_dump_json())
+
+                for item in live_federal:
+                    doc = Document(
+                        id=item["id"],
+                        source=SourceType.POLITICS,
+                        title=item["title"],
+                        content=f"{item.get('type', '')} — {item.get('agency', '')}",
+                        url=item.get("url", ""),
+                        metadata={"agency": item.get("agency", ""), "source": "federal_register_live"},
+                    )
+                    out_dir = Path(RAW_DATA_PATH) / "federal_register" / today
+                    out_dir.mkdir(parents=True, exist_ok=True)
+                    (out_dir / f"{doc.id}.json").write_text(doc.model_dump_json())
+
+                volume.commit()
+            except Exception as e:
+                print(f"Failed to write live regulatory data to volume: {e}")
 
         if span:
             span.set_attribute("output.value", json.dumps({"data_points": report["data_points"], "regulation_count": len(report["regulations"])}))
@@ -282,7 +534,7 @@ async def regulatory_agent(business_type: str) -> dict:
     secrets=[modal.Secret.from_name("alethia-secrets"), modal.Secret.from_name("arize-secrets")],
     timeout=300,
 )
-async def orchestrate_query(user_id: str, question: str, business_type: str, target_neighborhood: str) -> dict:
+async def orchestrate_query(user_id: str, question: str, business_type: str, target_neighborhood: str, trace_context: dict | None = None) -> dict:
     """Orchestrate parallel agents for query-time intelligence.
 
     1. Get user profile from Supermemory
@@ -291,11 +543,12 @@ async def orchestrate_query(user_id: str, question: str, business_type: str, tar
     4. Gather results
     5. Build synthesis prompt for LLM
     """
-    from modal_app.instrumentation import init_tracing, get_tracer
+    from modal_app.instrumentation import init_tracing, get_tracer, extract_context, inject_context
     init_tracing()
     tracer = get_tracer("alethia.agents")
+    parent_ctx = extract_context(trace_context)
 
-    span_ctx = tracer.start_as_current_span("orchestrate-query") if tracer else None
+    span_ctx = tracer.start_as_current_span("orchestrate-query", context=parent_ctx) if tracer else None
     span = span_ctx.__enter__() if span_ctx else None
     try:
         if span:
@@ -311,6 +564,9 @@ async def orchestrate_query(user_id: str, question: str, business_type: str, tar
             comparisons = ["Loop", "Lincoln Park"]
         comparisons = comparisons[:2]
 
+        # Capture current trace context to propagate to child agents
+        child_ctx = inject_context()
+
         # Fan-out via .spawn() — parallel agent execution
         agent_handles = []
 
@@ -319,6 +575,7 @@ async def orchestrate_query(user_id: str, question: str, business_type: str, tar
             neighborhood=target_neighborhood,
             business_type=business_type,
             focus_areas=["permits", "sentiment", "competition", "safety", "demographics"],
+            trace_context=child_ctx,
         )
         agent_handles.append(("primary", target_neighborhood, primary_handle))
 
@@ -328,12 +585,25 @@ async def orchestrate_query(user_id: str, question: str, business_type: str, tar
                 neighborhood=comp_neighborhood,
                 business_type=business_type,
                 focus_areas=["permits", "competition", "demographics"],
+                trace_context=child_ctx,
             )
             agent_handles.append(("comparison", comp_neighborhood, handle))
 
         # Regulatory agent
-        reg_handle = regulatory_agent.spawn(business_type=business_type)
+        reg_handle = regulatory_agent.spawn(business_type=business_type, trace_context=child_ctx)
         agent_handles.append(("regulatory", "all", reg_handle))
+
+        # TikTok: fire-and-forget scrape — results land on volume for Community tab on next refresh
+        try:
+            from modal_app.pipelines.tiktok import ingest_tiktok
+            tiktok_query = f"{target_neighborhood} {business_type} chicago"
+            ingest_tiktok.spawn(
+                queries=[tiktok_query],
+                max_videos=5,
+                transcribe=False,
+            )
+        except Exception:
+            pass
 
         # Gather results
         agent_results = {}
@@ -373,6 +643,22 @@ Agent reports:
             synthesis_prompt += f"\n--- {key} ---\n{json.dumps(result, indent=2, default=str)[:2000]}\n"
 
         synthesis_prompt += f"\nTotal data points analyzed: {total_data_points}"
+
+        # Append freshness warnings for aging/stale sources
+        freshness_warnings = []
+        for key, result in agent_results.items():
+            if not isinstance(result, dict):
+                continue
+            for source, freshness in result.get("freshness", {}).items():
+                if isinstance(freshness, dict):
+                    label = freshness.get("freshness_label", "")
+                    age = freshness.get("age_human", "")
+                    if label in ("aging", "stale"):
+                        freshness_warnings.append(f"WARNING: {source} data is {label} ({age})")
+
+        if freshness_warnings:
+            synthesis_prompt += "\n\nDATA FRESHNESS WARNINGS:\n" + "\n".join(freshness_warnings)
+            synthesis_prompt += "\nNote any stale data in your response and lower confidence accordingly."
 
         # Build synthesis messages for the caller to stream via LLM
         from modal_app.llm import SYSTEM_PROMPT
