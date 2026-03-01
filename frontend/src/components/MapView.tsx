@@ -2,6 +2,8 @@ import { useEffect, useRef, useState, useCallback } from 'react'
 import mapboxgl from 'mapbox-gl'
 import 'mapbox-gl/dist/mapbox-gl.css'
 
+const API_BASE = import.meta.env.VITE_MODAL_URL || '/api/data'
+
 type HeatmapLayer = 'regulatory' | 'business' | 'sentiment'
 
 const LAYER_CONFIG: Record<HeatmapLayer, {
@@ -88,7 +90,7 @@ export default function MapView({ activeNeighborhood, geojsonUrl }: Props) {
 
     map.on('load', () => {
       // Always fetch GeoJSON from modal volume
-      const sourceUrl = 'https://ibsrinivas27--alethia-serve.modal.run/geo'
+      const sourceUrl = `${API_BASE}/geo`
       console.log('Fetching GeoJSON from:', sourceUrl) // Debug: check URL being fetched
 
       // Try fetching the GeoJSON; if it fails, use an empty collection

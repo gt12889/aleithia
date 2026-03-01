@@ -18,7 +18,8 @@ import TrafficCard from './TrafficCard.tsx'
 import DemographicsCard from './DemographicsCard.tsx'
 import PipelineMonitor from './PipelineMonitor.tsx'
 import MLMonitor from './MLMonitor.tsx'
-import CCTVFeedCard from './CCTVFeedCard.tsx'
+// CCTVFeedCard disabled — component not yet created
+// import CCTVFeedCard from './CCTVFeedCard.tsx'
 
 type Tab = 'overview' | 'inspections' | 'permits' | 'licenses' | 'news' | 'community' | 'market' | 'models'
 
@@ -192,7 +193,7 @@ export default function Dashboard({ profile, onReset }: Props) {
   const refreshData = async () => {
     try {
       const [nbData, srcData] = await Promise.all([
-        api.neighborhood(profile.neighborhood),
+        api.neighborhood(profile.neighborhood, profile.business_type),
         api.sources(),
       ])
       setNeighborhoodData(nbData)
@@ -482,9 +483,7 @@ export default function Dashboard({ profile, onReset }: Props) {
                     <TrafficCard data={neighborhoodData.traffic} />
                   )}
 
-                  {neighborhoodData?.cctv && neighborhoodData.cctv.cameras.length > 0 && (
-                    <CCTVFeedCard cctv={neighborhoodData.cctv} />
-                  )}
+                  {/* CCTVFeedCard disabled — component not yet created */}
 
                   {neighborhoodData && (
                     <div className="grid grid-cols-3 lg:grid-cols-7 gap-3">

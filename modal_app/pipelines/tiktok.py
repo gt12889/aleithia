@@ -11,6 +11,7 @@ import hashlib
 import json
 import logging
 import os
+import re as _re
 import subprocess
 import tempfile
 from datetime import datetime, timezone
@@ -143,6 +144,7 @@ async def _scrape_async(search_query: str, max_videos: int) -> list[dict]:
                 const results = [];
                 const links = document.querySelectorAll('a[href*="/video/"]');
                 const seen = new Set();
+                const isCountString = (s) => /^\\d[\\d.,]*\\s*[KkMmBb]?$/.test(s.trim());
                 for (const link of links) {
                     const href = link.href;
                     if (seen.has(href)) continue;
@@ -156,15 +158,25 @@ async def _scrape_async(search_query: str, max_videos: int) -> list[dict]:
                         }
                         return '';
                     };
-                    const description = getText(card, [
+                    let description = getText(card, [
                         '[data-e2e="search-card-desc"]',
                         '[class*="SpanText"]',
                         '[class*="desc"]',
-                    ]) || link.textContent?.trim() || '';
+                        '[class*="card-desc"]',
+                        '[class*="VideoDesc"]',
+                    ]);
+                    if (isCountString(description)) description = '';
+                    if (!description) {
+                        const fallback = (link.textContent || '').trim();
+                        if (fallback.length > 10 && !isCountString(fallback)) {
+                            description = fallback;
+                        }
+                    }
                     const creator = getText(card, [
                         '[data-e2e="search-card-user-unique-id"]',
                         '[class*="SpanUniqueId"]',
                         '[class*="author"]',
+                        '[class*="AuthorTitle"]',
                     ]);
                     const views = getText(card, [
                         '[class*="video-count"]',
@@ -286,6 +298,31 @@ def _make_doc_id(video_url: str) -> str:
     return f"tiktok-{hashlib.sha256(video_url.encode()).hexdigest()[:16]}"
 
 
+_VIEW_COUNT_RE = _re.compile(r"^\d[\d.,]*\s*[KkMmBb]?$")
+
+
+def _build_tiktok_title(v: dict) -> str:
+    """Build a meaningful title for a TikTok video document."""
+    desc = v.get("description", "").strip()
+    if desc and _VIEW_COUNT_RE.match(desc):
+        desc = ""
+    if desc:
+        return desc[:200]
+    parts = []
+    creator = v.get("creator", "")
+    if creator:
+        parts.append(f"@{creator}")
+    hashtags = v.get("hashtags", [])
+    if hashtags:
+        parts.append(" ".join(f"#{h}" for h in hashtags[:3]))
+    if parts:
+        return " ".join(parts)[:200]
+    search_query = v.get("search_query", "")
+    if search_query:
+        return f"TikTok: {search_query}"
+    return "TikTok video"
+
+
 @app.function(
     image=tiktok_image,
     timeout=600,
@@ -313,11 +350,12 @@ def ingest_tiktok(
     all_videos: list[dict] = []
     seen_urls: set[str] = set()
 
-    for result in scrape_tiktok.starmap(scrape_args):
+    for (q, _max), result in zip(scrape_args, scrape_tiktok.starmap(scrape_args)):
         for v in (result or []):
             url = v.get("video_url", "")
             if url and url not in seen_urls:
                 seen_urls.add(url)
+                v["search_query"] = q
                 all_videos.append(v)
 
     logger.info("Scraped %d unique videos from %d queries", len(all_videos), len(queries))
@@ -367,7 +405,7 @@ def ingest_tiktok(
         doc_data = {
             "id": doc_id,
             "source": SourceType.TIKTOK.value,
-            "title": v.get("description", "TikTok video")[:200],
+            "title": _build_tiktok_title(v),
             "content": content,
             "url": v.get("video_url", ""),
             "timestamp": datetime.now(timezone.utc).isoformat(),

@@ -1,5 +1,18 @@
 import type { Document } from '../types/index.ts'
 
+function parseViewCount(raw: string): number {
+  if (!raw) return 0
+  const cleaned = raw.trim().toUpperCase()
+  const match = cleaned.match(/^([\d.]+)\s*([KMB])?$/)
+  if (!match) return parseInt(raw, 10) || 0
+  const num = parseFloat(match[1])
+  const suffix = match[2]
+  if (suffix === 'K') return Math.round(num * 1_000)
+  if (suffix === 'M') return Math.round(num * 1_000_000)
+  if (suffix === 'B') return Math.round(num * 1_000_000_000)
+  return Math.round(num)
+}
+
 interface Props {
   reddit: Document[]
   tiktok: Document[]
@@ -76,7 +89,7 @@ export default function CommunityFeed({ reddit, tiktok }: Props) {
           </div>
           {tiktok.map((video) => {
             const creator = (video.metadata?.creator as string) || ''
-            const views = (video.metadata?.view_count as number) || 0
+            const views = parseViewCount((video.metadata?.views as string) || '')
             const hashtags = (video.metadata?.hashtags as string[]) || []
 
             return (

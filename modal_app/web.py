@@ -6,6 +6,7 @@ Modal features: @modal.asgi_app, streaming SSE
 """
 import json
 import os
+import re
 import time
 import uuid
 from datetime import datetime, timezone
@@ -77,6 +78,169 @@ def _filter_by_neighborhood(docs: list[dict], neighborhood: str) -> list[dict]:
             matched.append(d)
             continue
     return matched
+
+
+# Business type → review category keywords (for filtering reviews/licenses by relevance)
+BUSINESS_TYPE_KEYWORDS: dict[str, list[str]] = {
+    "restaurant": ["restaurant", "food", "dining", "cuisine", "eatery", "diner"],
+    "coffee shop": ["coffee", "cafe", "tea", "espresso", "bakery"],
+    "bar / nightlife": ["bar", "nightlife", "tavern", "pub", "lounge", "cocktail", "brewery"],
+    "retail store": ["retail", "shopping", "store", "boutique", "merchandise"],
+    "grocery / convenience": ["grocery", "convenience", "market", "deli", "bodega"],
+    "salon / barbershop": ["salon", "barbershop", "beauty", "hair", "spa", "nail"],
+    "fitness studio": ["fitness", "gym", "yoga", "pilates", "crossfit", "health club"],
+    "professional services": ["professional", "consulting", "legal", "accounting", "office"],
+    "food truck": ["food truck", "food", "catering", "street food", "mobile"],
+    "bakery": ["bakery", "pastry", "bread", "cake", "dessert", "sweets"],
+}
+
+
+def _filter_by_business_type(docs: list[dict], business_type: str) -> list[dict]:
+    """Filter review/market documents by business type relevance."""
+    if not business_type:
+        return docs
+    keywords = BUSINESS_TYPE_KEYWORDS.get(business_type.lower(), [business_type.lower()])
+    matched = []
+    for d in docs:
+        cats = d.get("metadata", {}).get("categories", [])
+        cat_text = " ".join(c.lower() if isinstance(c, str) else "" for c in cats)
+        title = d.get("title", "").lower()
+        content = d.get("content", "").lower()[:300]
+        combined = f"{cat_text} {title} {content}"
+        if any(kw in combined for kw in keywords):
+            matched.append(d)
+    return matched
+
+
+# Patterns indicating ceremonial/low-value legislation
+_CEREMONIAL_PATTERNS = [
+    "congratulat", "honorar", "commemorate", "memorial", "tribute",
+    "recognize", "recognition of", "appreciation", "in memory of",
+    "retirement of", "sympathy", "condolence",
+]
+
+# Patterns indicating bulk administrative items (low business relevance)
+_ADMINISTRATIVE_PATTERNS = [
+    "handicapped parking",
+    "disabled parking",
+    "parking permit no",
+    "vehicle sticker",
+    "pet license",
+    "animal license",
+    "residential parking",
+    "driveway permit",
+]
+
+
+def _filter_politics_relevance(docs: list[dict], business_type: str = "") -> list[dict]:
+    """Filter politics docs: remove ceremonial + bulk administrative items,
+    optionally boost business-relevant ones."""
+    filtered = []
+    for d in docs:
+        title_lower = d.get("title", "").lower()
+        if any(pat in title_lower for pat in _CEREMONIAL_PATTERNS):
+            continue
+        if any(pat in title_lower for pat in _ADMINISTRATIVE_PATTERNS):
+            continue
+        filtered.append(d)
+
+    if not business_type or not filtered:
+        return filtered
+
+    keywords = BUSINESS_TYPE_KEYWORDS.get(business_type.lower(), [business_type.lower()])
+    # Specific permit/license types instead of bare "permit" (which boosts parking permits)
+    keywords += [
+        "zoning", "ordinance", "inspection", "health", "safety",
+        "business permit", "liquor permit", "food permit", "building permit",
+        "liquor license", "food license", "special use",
+    ]
+
+    def relevance(d: dict) -> int:
+        text = f"{d.get('title', '')} {d.get('content', '')[:500]}".lower()
+        return sum(1 for kw in keywords if kw in text)
+
+    filtered.sort(key=relevance, reverse=True)
+    return filtered
+
+
+# --- News relevance filtering ---
+
+_NON_LOCAL_NEWS_PATTERNS = re.compile(
+    r"(nba|nfl|mlb|nhl|sox\s+(spring|training)|cubs\s+spring|"
+    r"bears\s+(draft|trade)|bulls\s+(trade|score)|blackhawks|"
+    r"world\s+series|super\s+bowl|march\s+madness|"
+    r"iran|ukraine|gaza|autoridades|"
+    r"election\s+results|white\s+house)",
+    re.IGNORECASE,
+)
+
+
+def _is_likely_english(text: str) -> bool:
+    """Quick heuristic: check if text is predominantly ASCII/English."""
+    if not text:
+        return True
+    ascii_count = sum(1 for c in text[:200] if ord(c) < 128)
+    return (ascii_count / min(len(text), 200)) > 0.85
+
+
+def _filter_news_relevance(
+    docs: list[dict], business_type: str = "", neighborhood: str = "",
+) -> list[dict]:
+    """Score and filter news by Chicago/business relevance.
+
+    Removes clearly irrelevant content (sports scores, foreign affairs,
+    non-English articles) and ranks remainder by business-type relevance.
+    """
+    nb_names_lower = [n.lower() for n in CHICAGO_NEIGHBORHOODS]
+    biz_keywords = (
+        BUSINESS_TYPE_KEYWORDS.get(business_type.lower(), [business_type.lower()])
+        if business_type else []
+    )
+
+    scored: list[tuple[dict, int]] = []
+    for d in docs:
+        title = d.get("title", "")
+        content = d.get("content", "")[:500]
+        combined = f"{title} {content}".lower()
+
+        # Hard filters
+        if not _is_likely_english(title):
+            continue
+        if _NON_LOCAL_NEWS_PATTERNS.search(combined):
+            continue
+
+        score = 0
+        if "chicago" in combined:
+            score += 3
+        for nb in nb_names_lower:
+            if len(nb) > 4 and nb in combined:
+                score += 2
+                break
+        if neighborhood and neighborhood.lower() in combined:
+            score += 3
+        for kw in biz_keywords:
+            if kw in combined:
+                score += 2
+                break
+        for biz_word in ["business", "restaurant", "shop", "store", "zoning",
+                         "license", "regulation", "opening", "closing"]:
+            if biz_word in combined:
+                score += 1
+                break
+        # Local feed bonus
+        feed = d.get("metadata", {}).get("feed_name", "").lower()
+        if "block club" in feed:
+            score += 2
+        elif "tribune" in feed or "sun-times" in feed:
+            score += 1
+
+        scored.append((d, score))
+
+    scored.sort(key=lambda x: x[1], reverse=True)
+    result = [d for d, s in scored if s > 0]
+    if not result and scored:
+        result = [d for d, _ in scored[:5]]
+    return result
 
 
 def _load_demographics_summary() -> dict:
@@ -311,11 +475,9 @@ async def status():
     """Pipeline monitor — shows function states, doc counts, GPU status."""
     pipeline_status = {}
 
-    for source in ["news", "politics", "public_data", "demographics", "reddit", "reviews", "realestate", "tiktok", "traffic", "cctv"]:
+    # Traffic/CCTV temporarily excluded — pipelines not yet fully implemented
+    for source in ["news", "politics", "public_data", "demographics", "reddit", "reviews", "realestate", "tiktok"]:
         source_dir = Path(RAW_DATA_PATH) / source
-        if not source_dir.exists() and source == "traffic":
-            # Traffic processed docs live under processed/traffic
-            source_dir = Path(RAW_DATA_PATH) / "processed" / "traffic"
         if source_dir.exists():
             json_files = list(source_dir.rglob("*.json"))
             # Find most recent file
@@ -364,10 +526,9 @@ async def metrics():
     sources_active = 0
     neighborhoods_covered = set()
 
-    for source in ["news", "politics", "public_data", "demographics", "reddit", "reviews", "realestate", "tiktok", "traffic", "cctv"]:
+    # Traffic/CCTV temporarily excluded — pipelines not yet fully implemented
+    for source in ["news", "politics", "public_data", "demographics", "reddit", "reviews", "realestate", "tiktok"]:
         source_dir = Path(RAW_DATA_PATH) / source
-        if not source_dir.exists() and source == "traffic":
-            source_dir = Path(RAW_DATA_PATH) / "processed" / "traffic"
         if source_dir.exists():
             json_files = list(source_dir.rglob("*.json"))
             total_docs += len(json_files)
@@ -397,10 +558,9 @@ async def metrics():
 async def sources():
     """Available data sources with counts."""
     result = {}
-    for source in ["news", "politics", "public_data", "demographics", "reddit", "reviews", "realestate", "tiktok", "traffic", "cctv"]:
+    # Traffic/CCTV temporarily excluded — pipelines not yet fully implemented
+    for source in ["news", "politics", "public_data", "demographics", "reddit", "reviews", "realestate", "tiktok"]:
         source_dir = Path(RAW_DATA_PATH) / source
-        if not source_dir.exists() and source == "traffic":
-            source_dir = Path(RAW_DATA_PATH) / "processed" / "traffic"
         if source_dir.exists():
             count = len(list(source_dir.rglob("*.json")))
             result[source] = {"count": count, "active": count > 0}
@@ -410,94 +570,15 @@ async def sources():
 
 
 def _load_cctv_for_neighborhood(name: str) -> dict:
-    """Load latest CCTV analysis for cameras near a neighborhood."""
-    from modal_app.common import NEIGHBORHOOD_CENTROIDS
-    import math
+    """Load latest CCTV analysis for cameras near a neighborhood.
 
-    analysis_dir = Path(PROCESSED_DATA_PATH) / "cctv" / "analysis"
-    if not analysis_dir.exists():
-        return {"cameras": [], "avg_pedestrians": 0, "avg_vehicles": 0, "density": "unknown"}
-
-    centroid = NEIGHBORHOOD_CENTROIDS.get(name)
-    if not centroid:
-        return {"cameras": [], "avg_pedestrians": 0, "avg_vehicles": 0, "density": "unknown"}
-
-    clat, clng = centroid
-    cameras = []
-
-    # Group by camera_id, keep latest per camera
-    latest_by_cam: dict[str, dict] = {}
-    for jf in sorted(analysis_dir.glob("*.json"), reverse=True)[:200]:
-        try:
-            data = json.loads(jf.read_text())
-            cam_id = data.get("camera_id", "")
-            if cam_id in latest_by_cam:
-                continue
-            latest_by_cam[cam_id] = data
-        except Exception:
-            continue
-
-    # Filter by distance (< 5km from neighborhood centroid)
-    for cam_id, data in latest_by_cam.items():
-        # Get lat/lng from raw metadata
-        meta_dir = Path(RAW_DATA_PATH) / "cctv"
-        lat, lng = 0.0, 0.0
-        for date_dir in sorted(meta_dir.iterdir(), reverse=True) if meta_dir.exists() else []:
-            if not date_dir.is_dir() or date_dir.name == "frames":
-                continue
-            for mf in date_dir.glob(f"{cam_id}_*.json"):
-                try:
-                    meta = json.loads(mf.read_text())
-                    lat = meta.get("lat", 0)
-                    lng = meta.get("lng", 0)
-                    break
-                except Exception:
-                    continue
-            if lat:
-                break
-
-        if not lat:
-            continue
-
-        # Haversine approximation
-        R = 6371
-        dlat = math.radians(lat - clat)
-        dlon = math.radians(lng - clng)
-        a = (math.sin(dlat / 2) ** 2
-             + math.cos(math.radians(clat)) * math.cos(math.radians(lat))
-             * math.sin(dlon / 2) ** 2)
-        dist = R * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
-
-        if dist < 5:
-            cameras.append({
-                "camera_id": cam_id,
-                "lat": lat,
-                "lng": lng,
-                "distance_km": round(dist, 2),
-                "pedestrians": data.get("pedestrians", 0),
-                "vehicles": data.get("vehicles", 0),
-                "bicycles": data.get("bicycles", 0),
-                "density_level": data.get("density_level", "unknown"),
-                "timestamp": data.get("timestamp", ""),
-            })
-
-    if not cameras:
-        return {"cameras": [], "avg_pedestrians": 0, "avg_vehicles": 0, "density": "unknown"}
-
-    avg_p = sum(c["pedestrians"] for c in cameras) / len(cameras)
-    avg_v = sum(c["vehicles"] for c in cameras) / len(cameras)
-    density = "high" if avg_p > 20 else "medium" if avg_p > 5 else "low"
-
-    return {
-        "cameras": cameras[:10],
-        "avg_pedestrians": round(avg_p, 1),
-        "avg_vehicles": round(avg_v, 1),
-        "density": density,
-    }
+    Temporarily disabled — CCTV pipeline not yet fully implemented.
+    """
+    return {"cameras": [], "avg_pedestrians": 0, "avg_vehicles": 0, "density": "unknown"}
 
 
 @web_app.get("/neighborhood/{name}")
-async def neighborhood(name: str):
+async def neighborhood(name: str, business_type: str = ""):
     """Full neighborhood data profile."""
     from modal_app.instrumentation import get_tracer
     tracer = get_tracer("alethia.web")
@@ -541,34 +622,62 @@ async def neighborhood(name: str):
         all_politics = _load_docs("politics")
 
         news_docs = _filter_by_neighborhood(all_news, name)
-        politics_docs = _filter_by_neighborhood(all_politics, name)
+        if news_docs:
+            news_docs = _filter_news_relevance(news_docs, business_type, name)
+        politics_docs = _filter_politics_relevance(
+            _filter_by_neighborhood(all_politics, name),
+            business_type,
+        )
 
         # Load additional data sources
         all_reddit = _load_docs("reddit")
         all_reviews = _load_docs("reviews")
         all_realestate = _load_docs("realestate")
         all_tiktok = _load_docs("tiktok")
-        all_traffic = _load_docs("processed/traffic")
 
         reddit_docs = _filter_by_neighborhood(all_reddit, name)
         reviews_docs = _filter_by_neighborhood(all_reviews, name)
         realestate_docs = _filter_by_neighborhood(all_realestate, name)
         tiktok_docs = _filter_by_neighborhood(all_tiktok, name)
-        traffic_docs = _filter_by_neighborhood(all_traffic, name)
+        # Traffic/CCTV temporarily disabled — pipelines not yet fully implemented
+        traffic_docs: list[dict] = []
 
-        # Fallback: show some global data if no neighborhood-specific matches
+        # Further filter reviews by business type
+        if business_type and reviews_docs:
+            typed_reviews = _filter_by_business_type(reviews_docs, business_type)
+            if typed_reviews:
+                reviews_docs = typed_reviews
+
+        # Fallback: if no neighborhood-specific matches, use relevance-ranked global data
         if not reddit_docs and all_reddit:
-            reddit_docs = all_reddit[:5]
+            # Prefer posts mentioning the business type
+            if business_type:
+                kw_lower = BUSINESS_TYPE_KEYWORDS.get(business_type.lower(), [business_type.lower()])
+                scored = [(d, sum(1 for kw in kw_lower if kw in f"{d.get('title', '')} {d.get('content', '')[:300]}".lower())) for d in all_reddit]
+                scored.sort(key=lambda x: x[1], reverse=True)
+                reddit_docs = [d for d, _ in scored[:10]]
+            else:
+                reddit_docs = all_reddit[:10]
+
         if not reviews_docs and all_reviews:
-            reviews_docs = all_reviews[:5]
+            if business_type:
+                typed = _filter_by_business_type(all_reviews, business_type)
+                reviews_docs = typed[:10] if typed else all_reviews[:5]
+            else:
+                reviews_docs = all_reviews[:5]
+
         if not realestate_docs and all_realestate:
             realestate_docs = all_realestate[:5]
 
-        # If no neighborhood-specific news/politics, include recent global items
+        # Tiktok fallback (was missing entirely)
+        if not tiktok_docs and all_tiktok:
+            tiktok_docs = all_tiktok[:5]
+
+        # News/politics fallbacks with relevance filtering
         if not news_docs and all_news:
-            news_docs = all_news[:5]
+            news_docs = _filter_news_relevance(all_news, business_type, name)[:10]
         if not politics_docs and all_politics:
-            politics_docs = all_politics[:5]
+            politics_docs = _filter_politics_relevance(all_politics, business_type)[:10]
 
         # Compute inspection stats
         failed = sum(1 for i in inspections if i.get("metadata", {}).get("raw_record", {}).get("results") in ("Fail", "Out of Business"))
@@ -756,11 +865,8 @@ async def tiktok_list(neighborhood: str = ""):
 
 @web_app.get("/traffic")
 async def traffic_list(neighborhood: str = ""):
-    """Traffic flow data (processed Documents), optionally filtered."""
-    docs = _load_docs("processed/traffic", limit=100)
-    if neighborhood:
-        docs = _filter_by_neighborhood(docs, neighborhood)
-    return docs[:100]
+    """Traffic flow data — temporarily disabled, CCTV pipeline not yet fully implemented."""
+    return []
 
 
 def _aggregate_city_demographics() -> dict:
@@ -774,7 +880,8 @@ async def summary():
     """City-wide summary stats."""
     total_docs = 0
     source_counts = {}
-    for source in ["news", "politics", "public_data", "demographics", "realestate", "traffic", "cctv"]:
+    # Traffic/CCTV temporarily excluded — pipelines not yet fully implemented
+    for source in ["news", "politics", "public_data", "demographics", "realestate"]:
         source_dir = Path(RAW_DATA_PATH) / source
         if source_dir.exists():
             count = len(list(source_dir.rglob("*.json")))
@@ -792,41 +899,14 @@ async def summary():
 
 @web_app.get("/cctv/latest")
 async def cctv_latest():
-    """Latest CCTV analysis per camera: counts, density, location."""
-    analysis_dir = Path(PROCESSED_DATA_PATH) / "cctv" / "analysis"
-    if not analysis_dir.exists():
-        return {"cameras": [], "count": 0}
-
-    latest_by_cam: dict[str, dict] = {}
-    for jf in sorted(analysis_dir.glob("*.json"), reverse=True)[:500]:
-        try:
-            data = json.loads(jf.read_text())
-            cam_id = data.get("camera_id", "")
-            if cam_id not in latest_by_cam:
-                latest_by_cam[cam_id] = data
-        except Exception:
-            continue
-
-    cameras = list(latest_by_cam.values())
-    return {"cameras": cameras, "count": len(cameras)}
+    """Latest CCTV analysis — temporarily disabled, pipeline not yet fully implemented."""
+    return {"cameras": [], "count": 0}
 
 
 @web_app.get("/cctv/frame/{camera_id}")
 async def cctv_frame(camera_id: str):
-    """Serve latest annotated JPEG for a camera."""
-    from fastapi.responses import Response
-
-    ann_dir = Path(PROCESSED_DATA_PATH) / "cctv" / "annotated"
-    if not ann_dir.exists():
-        return JSONResponse({"error": "no annotated frames"}, status_code=404)
-
-    # Find latest annotated frame for this camera
-    frames = sorted(ann_dir.glob(f"{camera_id}_*.jpg"), reverse=True)
-    if not frames:
-        return JSONResponse({"error": f"no frames for camera {camera_id}"}, status_code=404)
-
-    frame_bytes = frames[0].read_bytes()
-    return Response(content=frame_bytes, media_type="image/jpeg")
+    """Serve latest annotated JPEG — temporarily disabled, pipeline not yet fully implemented."""
+    return JSONResponse({"error": "CCTV temporarily disabled"}, status_code=503)
 
 
 @web_app.get("/geo")
