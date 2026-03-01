@@ -802,7 +802,6 @@ async def persist_reddit_fallback_batch(docs: list[dict]) -> int:
     image=reddit_image,
     volumes={"/data": volume},
     secrets=[modal.Secret.from_name("alethia-secrets")],
-    schedule=modal.Period(hours=1),
     timeout=180,
     retries=modal.Retries(max_retries=2, backoff_coefficient=2.0),
 )
