@@ -9,6 +9,13 @@
     }
   },
   "rewrites": [
-    { "source": "/api/data/:path*", "destination": "https://gt12889--alethia-serve.modal.run/api/data/:path*" }
+    {
+      "source": "/api/data/:path*",
+      "destination": "https://gt12889--alethia-serve.modal.run/api/data/:path*"
+    },
+    {
+      "source": "/(.*)",
+      "destination": "/index.html"
+    }
   ]
 }
