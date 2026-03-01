@@ -1,16 +1,12 @@
-import { Suspense, useEffect, useState } from 'react'
+import { Suspense } from 'react'
 import Spline from '@splinetool/react-spline'
 import type { Application } from '@splinetool/runtime'
-import { MemoryGraph, injectStyles } from '@supermemory/memory-graph'
-import '@supermemory/memory-graph/styles.css'
-import type { DocumentWithMemories } from '@supermemory/memory-graph'
 import CityGlobe from './CityGlobe'
-import { api } from '../api.ts'
-
-injectStyles()
+import LogoLoop from './LogoLoop'
 
 interface Props {
   onGetStarted: () => void
+  onViewSource?: () => void
 }
 
 function makeStatic(app: Application) {
@@ -31,6 +27,23 @@ function tuneScene(app: Application) {
     }
   })
 }
+
+const SPONSORS = [
+  { name: 'Modal' },
+  { name: 'SuperMemory' },
+  { name: 'Arize AI' },
+  { name: 'OpenAI' },
+  { name: 'GPT-4o' },
+  { name: 'Claude' },
+  { name: 'Cursor Agent' },
+]
+
+const STATS = [
+  { value: '9', label: 'Live Sources' },
+  { value: '77', label: 'Neighborhoods' },
+  { value: '140K+', label: 'Records Indexed' },
+  { value: '< 30s', label: 'Analysis Time' },
+]
 
 const DATA_PILLARS = [
   {
@@ -55,35 +68,7 @@ const DATA_PILLARS = [
   },
 ]
 
-export default function LandingPage({ onGetStarted }: Props) {
-  const [graphDocs, setGraphDocs] = useState<DocumentWithMemories[]>([])
-  const [graphLoading, setGraphLoading] = useState(true)
-  const [graphError, setGraphError] = useState<Error | null>(null)
-
-  useEffect(() => {
-    api
-      .graph({ page: 1, limit: 500 })
-      .then((data) => {
-        const raw = (data as { documents?: Record<string, unknown>[] }).documents ?? []
-        const normalized: DocumentWithMemories[] = raw.map((doc) => ({
-          ...doc,
-          memoryEntries: (doc.memoryEntries ?? doc.memories ?? []) as DocumentWithMemories['memoryEntries'],
-          contentHash: (doc.contentHash ?? null) as string | null,
-          orgId: (doc.orgId ?? '') as string,
-          userId: (doc.userId ?? '') as string,
-          status: (doc.status ?? 'done') as DocumentWithMemories['status'],
-          createdAt: (doc.createdAt ?? new Date().toISOString()) as string,
-          updatedAt: (doc.updatedAt ?? new Date().toISOString()) as string,
-        })) as DocumentWithMemories[]
-        setGraphDocs(normalized)
-        setGraphLoading(false)
-      })
-      .catch((err) => {
-        setGraphError(err instanceof Error ? err : new Error(String(err)))
-        setGraphLoading(false)
-      })
-  }, [])
-
+export default function LandingPage({ onGetStarted, onViewSource }: Props) {
   return (
     <div className="bg-[#06080d] text-white">
       {/* ── Hero ── */}
@@ -133,17 +118,53 @@ export default function LandingPage({ onGetStarted }: Props) {
                 >
                   Analyze a Neighborhood
                 </button>
-                <a
-                  href="https://github.com"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="pointer-events-auto px-8 py-3.5 text-sm font-semibold border border-white/20 text-white/70 hover:text-white hover:border-white/40 transition-colors"
+                <button
+                  onClick={onViewSource}
+                  className="pointer-events-auto px-8 py-3.5 text-sm font-semibold border border-white/20 text-white/70 hover:text-white hover:border-white/40 transition-colors cursor-pointer"
                 >
-                  View Source
-                </a>
+                  How It Works
+                </button>
               </div>
             </div>
           </div>
+        </div>
+      </section>
+
+      {/* ── Sponsors Ticker ── */}
+      <section className="relative border-t border-white/[0.04] py-10">
+        <p className="text-center text-[10px] font-mono uppercase tracking-[0.3em] text-white/20 mb-6">
+          Sponsored by
+        </p>
+        <LogoLoop
+          logos={SPONSORS.map((s) => ({
+            node: (
+              <span className="text-sm font-semibold tracking-wide text-white/40 hover:text-white/70 transition-colors uppercase">
+                {s.name}
+              </span>
+            ),
+          }))}
+          speed={40}
+          gap={64}
+          logoHeight={24}
+          pauseOnHover
+          fadeOut
+          fadeOutColor="#06080d"
+        />
+      </section>
+
+      {/* ── Live Stats ── */}
+      <section className="border-t border-white/[0.04] py-16">
+        <div className="max-w-5xl mx-auto px-10 grid grid-cols-2 sm:grid-cols-4 gap-8">
+          {STATS.map((s) => (
+            <div key={s.label} className="text-center">
+              <p className="text-3xl sm:text-4xl font-bold tracking-tight text-white mb-1">
+                {s.value}
+              </p>
+              <p className="text-xs font-mono text-white/30 uppercase tracking-wider">
+                {s.label}
+              </p>
+            </div>
+          ))}
         </div>
       </section>
 
@@ -210,28 +231,22 @@ export default function LandingPage({ onGetStarted }: Props) {
 
       {/* ── Memory Graph ── */}
       <section className="relative border-t border-white/[0.04]">
-        <div className="px-10 pt-20 pb-6 max-w-7xl mx-auto">
+        <div className="px-10 py-20 max-w-7xl mx-auto text-center">
           <p className="text-xs font-mono font-medium uppercase tracking-[0.3em] text-white/30 mb-4">
             Knowledge layer
           </p>
           <h2 className="text-4xl sm:text-5xl font-bold tracking-tight text-white leading-[1.1] mb-4">
             Memory Graph
           </h2>
-          <p className="text-base text-white/50 mb-8 max-w-2xl">
+          <p className="text-base text-white/50 mb-10 max-w-2xl mx-auto">
             Every ingested document is stored in Supermemory and connected by semantic similarity. Explore the knowledge graph powering Alethia's intelligence.
           </p>
-        </div>
-        <div className="h-[700px] w-full">
-          <MemoryGraph
-            documents={graphDocs}
-            isLoading={graphLoading}
-            error={graphError}
-            variant="console"
+          <button
+            onClick={onViewSource}
+            className="pointer-events-auto px-8 py-3.5 text-sm font-semibold bg-white text-[#06080d] hover:bg-gray-200 transition-colors cursor-pointer"
           >
-            <div className="flex items-center justify-center h-full">
-              <p className="text-sm font-mono text-white/20">No documents ingested yet</p>
-            </div>
-          </MemoryGraph>
+            Explore the Graph
+          </button>
         </div>
       </section>
 
