@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo } from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
 import { SignedIn, SignedOut, SignInButton, SignUpButton, useClerk, useUser } from '@clerk/clerk-react'
-import type { UserProfile, NeighborhoodData, DataSources, RiskScore, CCTVData, Document, ParkingData } from '../types/index.ts'
+import type { UserProfile, NeighborhoodData, DataSources, RiskScore, CCTVData, Document as Doc, ParkingData } from '../types/index.ts'
 import { api, API_BASE, fetchTrends, type TrendData } from '../api.ts'
 import RiskCard from './RiskCard.tsx'
 import MapView from './MapView.tsx'
@@ -793,7 +793,7 @@ const PIPELINE_STEPS = [
   { label: 'Scoring', sub: 'Density classification' },
 ] as const
 
-function VisionTab({ cctv, traffic, parking, neighborhood }: { cctv: CCTVData | null; traffic: Document[]; parking: ParkingData | null; neighborhood: string }) {
+function VisionTab({ cctv, traffic, parking, neighborhood }: { cctv: CCTVData | null; traffic: Doc[]; parking: ParkingData | null; neighborhood: string }) {
   const [expandedCam, setExpandedCam] = useState<string | null>(null)
   const cameras = cctv?.cameras ?? []
 
