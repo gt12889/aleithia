@@ -19,16 +19,33 @@ const CODE = 'font-mono text-xs bg-white/[0.06] border border-white/[0.08] round
 const CARD = 'border border-white/[0.06] rounded-lg p-6 bg-white/[0.02]'
 
 function normalizeDocs(raw: Record<string, unknown>[]): DocumentWithMemories[] {
-  return raw.map((doc) => ({
-    ...doc,
-    memoryEntries: (doc.memoryEntries ?? []) as DocumentWithMemories['memoryEntries'],
-    contentHash: (doc.contentHash ?? null) as string | null,
-    orgId: (doc.orgId ?? '') as string,
-    userId: (doc.userId ?? '') as string,
-    status: (doc.status ?? 'done') as DocumentWithMemories['status'],
-    createdAt: (doc.createdAt ?? new Date().toISOString()) as string,
-    updatedAt: (doc.updatedAt ?? new Date().toISOString()) as string,
-  })) as DocumentWithMemories[]
+  return raw.map((doc) => {
+    const entries = (doc.memoryEntries ?? doc.memories ?? []) as DocumentWithMemories['memoryEntries']
+    const docId = String(doc.id ?? doc.customId ?? `doc-${Math.random().toString(36).slice(2)}`)
+    const createdAt = typeof doc.createdAt === 'string' ? doc.createdAt : new Date().toISOString()
+    const updatedAt = typeof doc.updatedAt === 'string' ? doc.updatedAt : createdAt
+    const containerTags = doc.containerTags as string[] | undefined
+    const memoryEntries = entries.length > 0 ? entries : [{
+      id: `${docId}-m0`,
+      documentId: docId,
+      content: (doc.content ?? doc.summary ?? '') as string | null,
+      title: (doc.title ?? null) as string | null,
+      createdAt,
+      updatedAt,
+      metadata: (doc.metadata ?? null) as Record<string, string | number | boolean> | null,
+    }]
+    return {
+      ...doc,
+      id: docId,
+      memoryEntries,
+      contentHash: (doc.contentHash ?? null) as string | null,
+      orgId: String(doc.orgId ?? ''),
+      userId: String(doc.userId ?? containerTags?.[0] ?? ''),
+      status: (doc.status ?? 'done') as DocumentWithMemories['status'],
+      createdAt,
+      updatedAt,
+    } as DocumentWithMemories
+  })
 }
 
 export default function HowItWorks({ onBack }: Props) {
@@ -48,8 +65,15 @@ export default function HowItWorks({ onBack }: Props) {
     api
       .graph({ page: 1, limit: PAGE_SIZE })
       .then((data) => {
-        const raw = (data as { documents?: Record<string, unknown>[]; pagination?: { totalPages: number } }).documents ?? []
-        const pagination = (data as { pagination?: { totalPages: number } }).pagination
+        const d = data as Record<string, unknown>
+        const pagination = d.pagination as { totalPages?: number } | undefined
+        let raw = (d.documents ?? d.memories ?? d.data) as Record<string, unknown>[] | undefined
+        if (!Array.isArray(raw) && raw && typeof raw === 'object') {
+          const inner = (raw as Record<string, unknown>).documents ?? (raw as Record<string, unknown>).memories
+          raw = Array.isArray(inner) ? inner : []
+        } else if (!Array.isArray(raw)) {
+          raw = []
+        }
         setDocuments(normalizeDocs(raw))
         setHasMore(pagination ? pagination.totalPages > 1 : false)
         setPage(1)
@@ -67,8 +91,15 @@ export default function HowItWorks({ onBack }: Props) {
     setIsLoadingMore(true)
     try {
       const data = await api.graph({ page: nextPage, limit: PAGE_SIZE })
-      const raw = (data as { documents?: Record<string, unknown>[]; pagination?: { totalPages: number } }).documents ?? []
-      const pagination = (data as { pagination?: { totalPages: number } }).pagination
+      const d = data as Record<string, unknown>
+      const pagination = d.pagination as { totalPages?: number } | undefined
+      let raw = (d.documents ?? d.memories ?? d.data) as Record<string, unknown>[] | undefined
+      if (!Array.isArray(raw) && raw && typeof raw === 'object') {
+        const inner = (raw as Record<string, unknown>).documents ?? (raw as Record<string, unknown>).memories
+        raw = Array.isArray(inner) ? inner : []
+      } else if (!Array.isArray(raw)) {
+        raw = []
+      }
       setDocuments((prev) => [...prev, ...normalizeDocs(raw)])
       setHasMore(pagination ? nextPage < pagination.totalPages : false)
       setPage(nextPage)
@@ -325,10 +356,8 @@ export default function HowItWorks({ onBack }: Props) {
             isLoading={isLoading}
             error={error}
             variant="console"
-            maxNodes={80}
-            showSpacesSelector
-            selectedSpace={selectedSpace}
-            onSpaceChange={setSelectedSpace}
+            maxNodes={200}
+            showSpacesSelector={false}
             hasMore={hasMore}
             loadMoreDocuments={loadMore}
             isLoadingMore={isLoadingMore}
@@ -341,7 +370,7 @@ export default function HowItWorks({ onBack }: Props) {
             onSlideshowStop={() => setSlideshowActive(false)}
           >
             <div className="flex items-center justify-center h-full">
-              <p className="text-sm font-mono text-white/20">No documents ingested yet</p>
+              <p className="text-sm font-mono text-white/20">No documents yet. Run a chat query to ingest documents.</p>
             </div>
           </MemoryGraph>
         </div>
