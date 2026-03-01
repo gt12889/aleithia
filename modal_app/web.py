@@ -41,14 +41,11 @@ web_app.add_middleware(
 )
 
 
-# Profile refresh throttling for background TikTok fetches.
-tiktok_refresh_dict = modal.Dict.from_name("alethia-tiktok-refresh", create_if_missing=True)
-tiktok_refresh_inflight_dict = modal.Dict.from_name("alethia-tiktok-refresh-inflight", create_if_missing=True)
-TIKTOK_REFRESH_COOLDOWN_SECONDS = 30 * 60
-TIKTOK_PROFILE_STALE_SECONDS = 6 * 60 * 60
+# Profile refresh coordination for background TikTok fetches.
+tiktok_refresh_recent_dict = modal.Dict.from_name("alethia-tiktok-refresh-recent", create_if_missing=True)
 TIKTOK_TARGET_COUNT = 5
 TIKTOK_LOCAL_RESERVE = 2
-TIKTOK_REFRESH_INFLIGHT_SECONDS = 10 * 60
+TIKTOK_TRIGGER_DEBOUNCE_SECONDS = 20
 _tiktok_refresh_locks: dict[str, asyncio.Lock] = {}
 _tiktok_refresh_locks_guard = asyncio.Lock()
 
@@ -1143,41 +1140,28 @@ async def _maybe_spawn_tiktok_profile_refresh(
     local_count: int,
     freshest_epoch: float,
 ) -> dict:
-    """Trigger non-blocking profile TikTok refresh when stale or insufficient."""
-    now_epoch = time.time()
-    stale = (now_epoch - freshest_epoch) > TIKTOK_PROFILE_STALE_SECONDS if freshest_epoch > 0 else True
-    insufficient = profile_count < TIKTOK_TARGET_COUNT or local_count < TIKTOK_LOCAL_RESERVE
+    """Trigger non-blocking profile TikTok refresh, debounced for duplicate UI bursts."""
 
     status = {
         "requested": False,
-        "reason": "fresh_and_sufficient",
+        "reason": "pending",
         "cooldown_seconds_remaining": 0,
         "profile_docs": profile_count,
         "local_docs": local_count,
     }
 
-    if not (stale or insufficient):
-        return status
-
     key = _refresh_key(business_type, neighborhood)
     key_lock = await _get_tiktok_refresh_lock(key)
     async with key_lock:
         now_epoch = time.time()
-        last_epoch = await _dict_get_float_aio(tiktok_refresh_dict, key, default=0.0)
-        elapsed = now_epoch - last_epoch
-        if elapsed < TIKTOK_REFRESH_COOLDOWN_SECONDS:
-            status["reason"] = "cooldown"
-            status["cooldown_seconds_remaining"] = int(TIKTOK_REFRESH_COOLDOWN_SECONDS - elapsed)
+        last_trigger_epoch = await _dict_get_float_aio(tiktok_refresh_recent_dict, key, default=0.0)
+        elapsed = now_epoch - last_trigger_epoch
+        if elapsed < TIKTOK_TRIGGER_DEBOUNCE_SECONDS:
+            status["reason"] = "debounced"
+            status["cooldown_seconds_remaining"] = int(TIKTOK_TRIGGER_DEBOUNCE_SECONDS - elapsed)
             return status
 
-        inflight_until = await _dict_get_float_aio(tiktok_refresh_inflight_dict, key, default=0.0)
-        if inflight_until > now_epoch:
-            status["reason"] = "inflight"
-            status["cooldown_seconds_remaining"] = int(inflight_until - now_epoch)
-            return status
-
-        await _dict_put_value_aio(tiktok_refresh_inflight_dict, key, now_epoch + TIKTOK_REFRESH_INFLIGHT_SECONDS)
-
+        await _dict_put_value_aio(tiktok_refresh_recent_dict, key, now_epoch)
         try:
             from modal_app.pipelines.tiktok import ingest_tiktok_for_profile
 
@@ -1194,13 +1178,11 @@ async def _maybe_spawn_tiktok_profile_refresh(
                     neighborhood=neighborhood,
                     transcribe=False,
                 )
-
-            await _dict_put_value_aio(tiktok_refresh_dict, key, now_epoch)
             status["requested"] = True
-            status["reason"] = "stale" if stale else "insufficient"
+            status["reason"] = "requested"
         except Exception as exc:
-            # Allow quick retry if spawn itself failed.
-            await _dict_put_value_aio(tiktok_refresh_inflight_dict, key, 0.0)
+            # Allow immediate retry if spawn submission failed.
+            await _dict_put_value_aio(tiktok_refresh_recent_dict, key, 0.0)
             status["reason"] = f"spawn_error:{exc}"
 
     return status

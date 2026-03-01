@@ -703,8 +703,6 @@ export default function Dashboard({ profile, onReset, token, onProfileUpdate, in
                 <CommunityFeed
                   reddit={neighborhoodData.reddit || []}
                   tiktok={neighborhoodData.tiktok || []}
-                  neighborhood={profile.neighborhood}
-                  businessType={profile.business_type}
                 />
               )}
 
