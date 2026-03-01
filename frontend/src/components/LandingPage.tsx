@@ -120,7 +120,7 @@ export default function LandingPage({ onGetStarted, onViewSource, onViewWhyUs }:
         aria-hidden={isReady}
       >
         <h1 className="text-4xl sm:text-6xl font-bold tracking-tight mb-6">
-          ALETHIA
+          ALEITHIA
         </h1>
         <div className="w-8 h-8 border-2 border-white/20 border-t-white/70 rounded-full animate-spin" />
       </div>
@@ -140,7 +140,7 @@ export default function LandingPage({ onGetStarted, onViewSource, onViewWhyUs }:
           {/* HUD-style quadrant nav: top-left */}
           <div className="col-start-1 row-start-1 flex items-center px-6 lg:px-10 py-5">
             <span className="text-lg font-semibold tracking-tight text-white uppercase font-mono">
-              Alethia
+              Aleithia
             </span>
           </div>
           {/* HUD-style quadrant nav: top-right */}
@@ -180,7 +180,7 @@ export default function LandingPage({ onGetStarted, onViewSource, onViewWhyUs }:
               />
               <h1 className="text-5xl sm:text-7xl font-bold tracking-tight text-white mb-8 leading-[1.05]">
                 <BlurText
-                  text="ALETHIA"
+                  text="ALEITHIA"
                   delay={120}
                   animateBy="chars"
                   direction="top"
