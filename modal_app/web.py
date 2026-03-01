@@ -1402,7 +1402,8 @@ async def neighborhood(name: str, business_type: str = ""):
         # Load CCTV analysis + peak hour from timeseries
         cctv_analysis = await _load_cctv_for_neighborhood(name)
         if cctv_analysis.get("cameras"):
-            ts = _aggregate_timeseries_for_neighborhood(name)
+            cam_ids = [c["camera_id"] for c in cctv_analysis["cameras"]]
+            ts = _aggregate_timeseries_for_neighborhood(name, camera_ids=cam_ids)
             if ts.get("hours"):
                 cctv_analysis["peak_hour"] = ts["peak_hour"]
                 cctv_analysis["peak_pedestrians"] = ts["peak_pedestrians"]
@@ -1766,14 +1767,10 @@ async def cctv_frame(camera_id: str):
     return Response(content=frame_bytes, media_type="image/jpeg")
 
 
-def _aggregate_timeseries_for_neighborhood(name: str) -> dict:
+def _aggregate_timeseries_for_neighborhood(name: str, camera_ids: list[str] | None = None) -> dict:
     """Aggregate per-camera timeseries into hourly buckets for a neighborhood."""
-    from datetime import timedelta
     from zoneinfo import ZoneInfo
 
-    volume.reload()
-    cctv_data = _load_cctv_for_neighborhood(name)
-    camera_ids = [c["camera_id"] for c in cctv_data.get("cameras", [])]
     if not camera_ids:
         return {"hours": [], "peak_hour": 0, "peak_pedestrians": 0, "camera_count": 0}
 
@@ -1839,7 +1836,9 @@ def _aggregate_timeseries_for_neighborhood(name: str) -> dict:
 @web_app.get("/cctv/timeseries/{neighborhood}")
 async def cctv_timeseries(neighborhood: str):
     """24h rolling timeseries aggregated by hour for a neighborhood's cameras."""
-    return _aggregate_timeseries_for_neighborhood(neighborhood)
+    cctv = await _load_cctv_for_neighborhood(neighborhood)
+    cam_ids = [c["camera_id"] for c in cctv.get("cameras", [])]
+    return _aggregate_timeseries_for_neighborhood(neighborhood, camera_ids=cam_ids)
 
 
 @web_app.get("/vision/streetscape/{neighborhood}")

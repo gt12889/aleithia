@@ -197,6 +197,7 @@ export interface NeighborhoodData {
   realestate?: Document[]
   tiktok?: Document[]
   traffic?: Document[]
+  federal_register?: Document[]
   inspection_stats: {
     total: number
     failed: number
