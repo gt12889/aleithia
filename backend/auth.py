@@ -3,7 +3,7 @@
 import os
 from typing import Optional
 import jwt
-from fastapi import HTTPException, Header
+from fastapi import HTTPException, Request
 
 CLERK_PUB_KEY = os.getenv("CLERK_SECRET_KEY", "").strip()
 
@@ -40,6 +40,7 @@ def verify_clerk_token(authorization: Optional[str]) -> str:
         raise HTTPException(status_code=401, detail=f"Auth error: {str(e)}")
 
 
-def extract_user_id(authorization: Optional[str] = Header(default=None)) -> str:
+def extract_user_id(request: Request) -> str:
     """FastAPI dependency to extract and verify user ID from Clerk token."""
+    authorization = request.headers.get("authorization")
     return verify_clerk_token(authorization)
