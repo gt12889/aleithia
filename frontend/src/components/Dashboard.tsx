@@ -700,7 +700,12 @@ export default function Dashboard({ profile, onReset, token, onProfileUpdate, in
               )}
 
               {activeTab === 'community' && neighborhoodData && (
-                <CommunityFeed reddit={neighborhoodData.reddit || []} tiktok={neighborhoodData.tiktok || []} />
+                <CommunityFeed
+                  reddit={neighborhoodData.reddit || []}
+                  tiktok={neighborhoodData.tiktok || []}
+                  neighborhood={profile.neighborhood}
+                  businessType={profile.business_type}
+                />
               )}
 
               {activeTab === 'market' && neighborhoodData && (

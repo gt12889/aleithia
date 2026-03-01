@@ -47,10 +47,82 @@ function transcriptHeadline(raw: string): string {
 interface Props {
   reddit: Document[]
   tiktok: Document[]
+  neighborhood?: string
+  businessType?: string
 }
 
-export default function CommunityFeed({ reddit, tiktok }: Props) {
-  const hasContent = reddit.length > 0 || tiktok.length > 0
+function normalizeTerm(value: string): string {
+  return (value || '')
+    .toLowerCase()
+    .replace(/[/_]+/g, ' ')
+    .replace(/[^a-z0-9\s-]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+function relevanceScore(video: Document, neighborhood?: string, businessType?: string): number {
+  const metadata = video.metadata || {}
+  const targetNeighborhood = normalizeTerm(neighborhood || '')
+  const targetBusiness = normalizeTerm(businessType || '')
+
+  const queryBusinessType = normalizeTerm(String(metadata.query_business_type || ''))
+  const queryNeighborhood = normalizeTerm(String(metadata.query_neighborhood || ''))
+  const queryScope = normalizeTerm(String(metadata.query_scope || ''))
+  const queryText = normalizeTerm(String(metadata.search_query || ''))
+  const geoNeighborhood = normalizeTerm(String(video.geo?.neighborhood || ''))
+  const combinedText = normalizeTerm(`${video.title || ''} ${video.content || ''}`)
+
+  // Hard reject explicit mismatches.
+  if (targetBusiness && queryBusinessType && queryBusinessType !== targetBusiness) {
+    return -1
+  }
+  if (targetNeighborhood && queryNeighborhood && queryNeighborhood !== targetNeighborhood) {
+    return -1
+  }
+  if (targetNeighborhood && geoNeighborhood && geoNeighborhood !== targetNeighborhood) {
+    return -1
+  }
+  // Priority 1: business type relevance.
+  let businessScore = 0
+  if (!targetBusiness) {
+    businessScore = 1
+  } else if (queryBusinessType === targetBusiness) {
+    businessScore = 4
+  } else if (queryText.includes(targetBusiness) || combinedText.includes(targetBusiness)) {
+    businessScore = 3
+  } else {
+    return -1
+  }
+
+  // Priority 2: neighborhood relevance.
+  let neighborhoodScore = 0
+  if (!targetNeighborhood) {
+    neighborhoodScore = 0
+  } else if (queryNeighborhood === targetNeighborhood || geoNeighborhood === targetNeighborhood) {
+    neighborhoodScore = 2
+  } else if (queryScope === 'city') {
+    neighborhoodScore = 1
+  } else if (combinedText.includes(targetNeighborhood)) {
+    neighborhoodScore = 1
+  } else if (queryScope === 'local') {
+    return -1
+  }
+
+  return businessScore * 100 + neighborhoodScore * 10
+}
+
+export default function CommunityFeed({ reddit, tiktok, neighborhood, businessType }: Props) {
+  const filteredTikTok = tiktok
+    .map((video) => ({ video, relevance: relevanceScore(video, neighborhood, businessType) }))
+    .filter((entry) => entry.relevance >= 0)
+    .sort((a, b) => {
+      if (b.relevance !== a.relevance) return b.relevance - a.relevance
+      const viewsA = parseViewCount(String(a.video.metadata?.views || ''))
+      const viewsB = parseViewCount(String(b.video.metadata?.views || ''))
+      return viewsB - viewsA
+    })
+    .map((entry) => entry.video)
+  const hasContent = reddit.length > 0 || filteredTikTok.length > 0
 
   if (!hasContent) {
     return (
@@ -116,9 +188,14 @@ export default function CommunityFeed({ reddit, tiktok }: Props) {
         <div className="space-y-2">
           <div className="flex items-center justify-between px-1">
             <h3 className="text-[10px] font-mono font-medium uppercase tracking-wider text-white/30">TikTok</h3>
-            <span className="text-[10px] font-mono text-white/15">{tiktok.length} videos</span>
+            <span className="text-[10px] font-mono text-white/15">{filteredTikTok.length} videos</span>
           </div>
-          {tiktok.map((video) => {
+          {filteredTikTok.length === 0 && (
+            <div className="border border-white/[0.06] bg-white/[0.01] p-4 text-[10px] font-mono uppercase tracking-wider text-white/25">
+              No relevant TikTok videos for this profile yet
+            </div>
+          )}
+          {filteredTikTok.map((video) => {
             const creator = (video.metadata?.creator as string) || ''
             const query = (video.metadata?.search_query as string) || ''
             const views = parseViewCount((video.metadata?.views as string) || '')
