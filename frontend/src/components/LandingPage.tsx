@@ -149,12 +149,11 @@ export default function LandingPage({ onGetStarted, onViewSource }: Props) {
                  Business Intelligence Platform
               </p>
               <h1 className="text-5xl sm:text-7xl font-bold tracking-tight text-white mb-8 leading-[1.05]">
-                Infrastructure-grade
+                ALETHIA
                 <br />
-                market intelligence.
               </h1>
               <p className="text-base sm:text-lg text-white/50 mb-12 max-w-xl mx-auto leading-relaxed">
-                9 live data sources fused into one city graph. Risk scores,
+                Live data sources,
                 opportunity briefs, and neighborhood insights — before you sign
                 the lease.
               </p>
@@ -303,14 +302,14 @@ export default function LandingPage({ onGetStarted, onViewSource }: Props) {
 
       {/* ── Memory Graph ── */}
       <section className="relative border-t border-white/[0.04]">
-        <div className="px-10 py-20 max-w-7xl mx-auto text-center">
+        <div className="px-10 py-20 max-w-7xl ml-auto text-right">
           <p className="text-xs font-mono font-medium uppercase tracking-[0.3em] text-white/30 mb-4">
             Knowledge layer
           </p>
           <h2 className="text-4xl sm:text-5xl font-bold tracking-tight text-white leading-[1.1] mb-4">
             Memory Graph
           </h2>
-          <p className="text-base text-white/50 mb-10 max-w-2xl mx-auto">
+          <p className="text-base text-white/50 mb-10 max-w-2xl ml-auto">
             Every ingested document is stored in Supermemory and connected by semantic similarity. Explore the knowledge graph powering Alethia's intelligence.
           </p>
           <button
@@ -328,8 +327,8 @@ export default function LandingPage({ onGetStarted, onViewSource }: Props) {
           <p className="text-xs font-mono text-white/20">
             Built at HackIllinois 2026
           </p>
-          <p className="text-xs font-mono text-white/20">mkmok
-            Chicago Open Data / Reddit / Yelp / Legistar
+          <p className="text-xs font-mono text-white/20">
+            Democratizing business intelligence.
           </p>
         </div>
       </footer>
