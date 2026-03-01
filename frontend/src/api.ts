@@ -1,7 +1,7 @@
 import type { DataSources, GeoJSON, NeighborhoodData, Document, CCTVTimeseries, StreetscapeData } from './types'
 
 // Modal deployed endpoint — set via VITE_MODAL_URL, fallback to local proxy
-const API_BASE = import.meta.env.VITE_MODAL_URL || '/api/data'
+export const API_BASE = import.meta.env.VITE_MODAL_URL || '/api/data'
 
 // Stable user identity — persisted in localStorage so Supermemory can retrieve past context
 function getOrCreateUserId(): string {

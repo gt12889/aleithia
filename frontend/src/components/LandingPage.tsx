@@ -16,6 +16,7 @@ const SPONSOR_LOGO_SVGS = {
 interface Props {
   onGetStarted: () => void
   onViewSource?: () => void
+  onViewWhyUs?: () => void
 }
 
 const logoImg = (src: string, alt: string, invert?: boolean) => (
@@ -100,7 +101,7 @@ const DATA_PILLARS = [
 const MIN_LOAD_TIME_MS = 700
 const MAX_LOAD_TIME_MS = 5000
 
-export default function LandingPage({ onGetStarted, onViewSource }: Props) {
+export default function LandingPage({ onGetStarted, onViewSource, onViewWhyUs }: Props) {
   const { user } = useUser()
   const [isReady, setIsReady] = useState(false)
   const [heroLoaded, setHeroLoaded] = useState(false)
@@ -366,6 +367,29 @@ export default function LandingPage({ onGetStarted, onViewSource }: Props) {
           </button>
         </div>
       </section>
+
+      {/* ── Why Us ── */}
+      {onViewWhyUs && (
+        <section className="border-t border-white/[0.04] py-16">
+          <div className="max-w-5xl mx-auto px-10 text-center">
+            <p className="text-xs font-mono font-medium uppercase tracking-[0.3em] text-white/30 mb-4">
+              Value proposition
+            </p>
+            <h2 className="text-3xl sm:text-4xl font-bold tracking-tight text-white mb-6">
+              Why choose Aleithia?
+            </h2>
+            <p className="text-base text-white/50 mb-10 max-w-2xl mx-auto">
+              Traditional market research costs thousands and takes weeks. Aleithia delivers neighborhood intelligence in seconds, for free.
+            </p>
+            <button
+              onClick={onViewWhyUs}
+              className="pointer-events-auto px-8 py-3.5 text-sm font-semibold border border-white/20 text-white/70 hover:text-white hover:border-white/40 transition-colors cursor-pointer"
+            >
+              Why Us?
+            </button>
+          </div>
+        </section>
+      )}
 
       {/* ── Footer ── */}
       <footer className="px-10 py-8 border-t border-white/[0.04]">

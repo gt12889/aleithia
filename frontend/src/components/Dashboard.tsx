@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo } from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
 import { SignedIn, SignedOut, SignInButton, SignUpButton, useClerk, useUser } from '@clerk/clerk-react'
 import type { UserProfile, NeighborhoodData, DataSources, RiskScore, CCTVData, Document } from '../types/index.ts'
-import { api, fetchTrends, type TrendData } from '../api.ts'
+import { api, API_BASE, fetchTrends, type TrendData } from '../api.ts'
 import RiskCard from './RiskCard.tsx'
 import MapView from './MapView.tsx'
 import Timer from './Timer.tsx'
@@ -35,7 +35,7 @@ import ProfilePage from './ProfilePage.tsx'
   import ChatPanel from './ChatPanel.tsx'
 */
 
-type Tab = 'overview' | 'inspections' | 'permits' | 'licenses' | 'news' | 'community' | 'market' | 'vision' | 'models'
+type Tab = 'overview' | 'inspections' | 'permits' | 'licenses' | 'news' | 'community' | 'market' | 'vision' | 'models' | 'vault'
 
 interface ReportAgentInfo {
   agents_deployed: number
@@ -453,6 +453,7 @@ export default function Dashboard({ profile, onReset, token, onProfileUpdate, in
     { key: 'market', label: 'Market', count: (neighborhoodData?.reviews?.length || 0) + (neighborhoodData?.realestate?.length || 0), isEmpty: () => !((neighborhoodData?.reviews?.length || 0) + (neighborhoodData?.realestate?.length || 0)) },
     { key: 'vision', label: 'Vision', count: neighborhoodData?.cctv?.cameras.length || 0, isEmpty: () => false },
     { key: 'models', label: 'Models' },
+    { key: 'vault', label: 'Vault' },
   ]
   const tabs = useMemo(
     () => allTabs.filter(t => !t.isEmpty || !(t.isEmpty?.() ?? false)),
@@ -530,8 +531,17 @@ export default function Dashboard({ profile, onReset, token, onProfileUpdate, in
       </header>
 
       {error && (
-        <div className="mx-6 mt-4 p-4 bg-red-500/[0.06] border border-red-500/20 text-red-400/80 text-xs font-mono">
-          {error} — Check that VITE_MODAL_URL is set or the Modal backend is deployed
+        <div className="mx-6 mt-4 p-4 bg-red-500/[0.06] border border-red-500/20 text-red-400/80 text-xs font-mono space-y-2">
+          <p>{error}</p>
+          <p className="text-white/50">
+            API: {API_BASE} — Restart dev server after changing <code className="bg-white/10 px-1">frontend/.env</code>. Deploy: <code className="bg-white/10 px-1">modal deploy modal_app/__init__.py</code>
+          </p>
+          <button
+            onClick={() => { setError(null); setLoading(true); refreshData() }}
+            className="mt-2 px-3 py-1.5 text-[10px] font-medium border border-white/20 text-white/70 hover:text-white hover:border-white/40 transition-colors cursor-pointer"
+          >
+            Retry
+          </button>
         </div>
       )}
 
@@ -666,21 +676,6 @@ export default function Dashboard({ profile, onReset, token, onProfileUpdate, in
                     </div>
                   )}
 
-                  <div className="border border-white/[0.06] p-5">
-                    <div className="flex items-center justify-center gap-12">
-                      <div className="text-center">
-                        <div className="text-[10px] font-mono uppercase tracking-wider text-white/20 mb-1">Traditional</div>
-                        <div className="text-lg font-bold text-white/30 line-through font-mono">$5K–$15K</div>
-                        <div className="text-[10px] font-mono text-white/15">2–3 weeks</div>
-                      </div>
-                      <div className="text-xs font-mono text-white/10">vs</div>
-                      <div className="text-center">
-                        <div className="text-[10px] font-mono uppercase tracking-wider text-white/20 mb-1">Aleithia</div>
-                        <div className="text-lg font-bold text-white font-mono">$0</div>
-                        <div className="text-[10px] font-mono text-white/30">seconds</div>
-                      </div>
-                    </div>
-                  </div>
                 </div>
               )}
 
@@ -717,6 +712,15 @@ export default function Dashboard({ profile, onReset, token, onProfileUpdate, in
                   <CityGraph activeNeighborhood={profile.neighborhood} />
                   <MLMonitor />
                 </div>
+              )}
+
+              {activeTab === 'vault' && (
+                <VaultTab
+                  onOpenGraph={() => navigate('/memory-graph')}
+                  dataPoints={reportAgentInfo?.data_points ?? 0}
+                  neighborhoodData={neighborhoodData}
+                  neighborhood={profile.neighborhood}
+                />
               )}
             </>
           )}
@@ -1103,6 +1107,171 @@ function VisionTab({ cctv, traffic, neighborhood }: { cctv: CCTVData | null; tra
           </table>
         </div>
       )}
+    </div>
+  )
+}
+
+function VaultTab({
+  onOpenGraph,
+  dataPoints = 0,
+  neighborhoodData,
+  neighborhood,
+}: {
+  onOpenGraph: () => void
+  dataPoints?: number
+  neighborhoodData?: NeighborhoodData | null
+  neighborhood?: string
+}) {
+  // Rough estimate: 2 min per doc manually vs seconds with AI
+  const hoursReclaimed = dataPoints ? Math.round((dataPoints * 2) / 60 * 10) / 10 : 0
+  const manualMinutes = dataPoints * 2
+  const aiMinutes = Math.max(1, Math.round(dataPoints * 0.05))
+
+  // Data volume by source for charts
+  const sourceData = neighborhoodData
+    ? [
+        { label: 'Inspections', value: neighborhoodData.inspection_stats?.total ?? 0, color: 'bg-amber-500/70' },
+        { label: 'Permits', value: neighborhoodData.permit_count ?? 0, color: 'bg-blue-500/70' },
+        { label: 'Licenses', value: neighborhoodData.license_count ?? 0, color: 'bg-emerald-500/70' },
+        { label: 'Intel', value: (neighborhoodData.news?.length ?? 0) + (neighborhoodData.politics?.length ?? 0), color: 'bg-violet-500/70' },
+        { label: 'Community', value: (neighborhoodData.reddit?.length ?? 0) + (neighborhoodData.tiktok?.length ?? 0), color: 'bg-rose-500/70' },
+        { label: 'Market', value: (neighborhoodData.reviews?.length ?? 0) + (neighborhoodData.realestate?.length ?? 0), color: 'bg-cyan-500/70' },
+        { label: 'Vision', value: neighborhoodData.cctv?.cameras?.length ?? 0, color: 'bg-orange-500/70' },
+        { label: 'Traffic', value: neighborhoodData.traffic?.length ?? 0, color: 'bg-slate-500/70' },
+      ].filter((d) => d.value > 0)
+    : []
+  const maxSource = Math.max(...sourceData.map((d) => d.value), 1)
+
+  return (
+    <div className="space-y-6">
+      {/* 2. Neural Graph Visualization */}
+      <div className="border border-white/[0.06] bg-white/[0.02] p-5">
+        <h3 className="text-sm font-semibold text-white mb-3">2. The &quot;Neural&quot; Graph Visualization</h3>
+        <p className="text-xs text-white/60 leading-relaxed mb-3">
+          The standout feature is the Knowledge Graph, which visually proves that content is connected.
+        </p>
+        {neighborhood && (
+          <div className="mb-4 border border-white/[0.06] rounded overflow-hidden">
+            <CityGraph activeNeighborhood={neighborhood} />
+          </div>
+        )}
+        <ul className="text-xs text-white/50 space-y-2 list-disc list-inside mb-3">
+          <li><strong className="text-white/70">Nodes:</strong> Neighborhoods, regulations, entities</li>
+          <li><strong className="text-white/70">Edges:</strong> Connect nodes that share similar themes</li>
+          <li><strong className="text-white/70">Interactive:</strong> Drag nodes, filter by type</li>
+        </ul>
+        <button
+          onClick={onOpenGraph}
+          className="px-4 py-2 text-xs font-medium border border-white/20 text-white/70 hover:text-white hover:border-white/40 transition-colors cursor-pointer"
+        >
+          Open Full Knowledge Graph
+        </button>
+      </div>
+
+      {/* 3. List vs. Node — Data by Source Chart */}
+      <div className="border border-white/[0.06] bg-white/[0.02] p-5">
+        <h3 className="text-sm font-semibold text-white mb-3">3. List vs. Node Representation</h3>
+        <p className="text-xs text-white/60 leading-relaxed mb-4">
+          Data volume by source for this analysis — List view (tabs) vs. Node view (graph).
+        </p>
+        {sourceData.length > 0 ? (
+          <div className="space-y-2 mb-4">
+            <div className="text-[10px] font-mono uppercase tracking-wider text-white/40 mb-2">Data Volume by Source</div>
+            {sourceData.map((d) => (
+              <div key={d.label} className="flex items-center gap-3">
+                <span className="text-xs font-mono text-white/60 w-20 shrink-0">{d.label}</span>
+                <div className="flex-1 h-5 bg-white/[0.04] rounded overflow-hidden">
+                  <div
+                    className={`h-full rounded ${d.color} transition-all`}
+                    style={{ width: `${(d.value / maxSource) * 100}%` }}
+                  />
+                </div>
+                <span className="text-[10px] font-mono text-white/40 w-8 text-right">{d.value}</span>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <p className="text-xs text-white/30 mb-4">No data loaded yet.</p>
+        )}
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div className="border border-white/[0.06] p-4">
+            <div className="text-[10px] font-mono uppercase tracking-wider text-white/40 mb-2">List View</div>
+            <p className="text-xs text-white/50">Use Inspections, Permits, Intel, Community, Market tabs for quick scanning.</p>
+          </div>
+          <div className="border border-white/[0.06] p-4">
+            <div className="text-[10px] font-mono uppercase tracking-wider text-white/40 mb-2">Node View</div>
+            <p className="text-xs text-white/50">See how neighborhoods and regulations cluster together.</p>
+            <button
+              onClick={onOpenGraph}
+              className="mt-2 px-3 py-1.5 text-[10px] font-medium border border-white/20 text-white/60 hover:text-white/80 transition-colors cursor-pointer"
+            >
+              View Graph
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {/* 4. Visualizing the &quot;Attention Crisis&quot; */}
+      <div className="border border-white/[0.06] bg-white/[0.02] p-5">
+        <h3 className="text-sm font-semibold text-white mb-3">4. Visualizing the &quot;Attention Crisis&quot;</h3>
+        <p className="text-xs text-white/60 leading-relaxed mb-4">
+          Time saved by using AI analysis vs. manually reviewing each data point (est. 2 min/doc).
+        </p>
+        <div className="space-y-4">
+          <div className="flex items-center gap-4 p-4 border border-white/[0.06]">
+            <div className="text-2xl font-bold font-mono text-white">{hoursReclaimed > 0 ? `${hoursReclaimed}h` : '—'}</div>
+            <div>
+              <div className="text-[10px] font-mono uppercase tracking-wider text-white/40 mb-1">Time Reclaimed</div>
+              <p className="text-xs text-white/50">
+                {dataPoints ? `Hours saved vs. manually reviewing ${dataPoints} data points.` : 'A prominent metric showing hours saved by AI vs. manual review.'}
+              </p>
+            </div>
+          </div>
+          {dataPoints > 0 && (
+            <div className="space-y-2">
+              <div className="text-[10px] font-mono uppercase tracking-wider text-white/40 mb-2">Manual vs. AI Review Time</div>
+              <div className="flex items-end gap-6 h-20">
+                <div className="flex-1 flex flex-col items-center">
+                  <div
+                    className="w-full max-w-[60px] mx-auto bg-red-500/50 rounded-t"
+                    style={{ height: '100%' }}
+                  />
+                  <span className="text-[10px] font-mono text-white/40 mt-1">Manual</span>
+                  <span className="text-[9px] font-mono text-white/30">{manualMinutes}m</span>
+                </div>
+                <div className="flex-1 flex flex-col items-center">
+                  <div
+                    className="w-full max-w-[60px] mx-auto bg-emerald-500/70 rounded-t"
+                    style={{ height: `${Math.max(6, (aiMinutes / manualMinutes) * 100)}%` }}
+                  />
+                  <span className="text-[10px] font-mono text-white/40 mt-1">Aleithia</span>
+                  <span className="text-[9px] font-mono text-white/30">{aiMinutes}m</span>
+                </div>
+              </div>
+            </div>
+          )}
+          {sourceData.length > 0 && (
+            <div className="p-4 border border-white/[0.06]">
+              <div className="text-[10px] font-mono uppercase tracking-wider text-white/40 mb-2">Impact: Data Volume by Source</div>
+              <div className="flex items-end gap-1 h-20">
+                {sourceData.map((d) => (
+                  <div
+                    key={d.label}
+                    className="flex-1 flex flex-col items-center justify-end group relative"
+                    title={`${d.label}: ${d.value}`}
+                  >
+                    <div
+                      className={`w-full min-w-[4px] rounded-t ${d.color} transition-all hover:opacity-90`}
+                      style={{ height: `${(d.value / maxSource) * 100}%` }}
+                    />
+                    <span className="text-[8px] font-mono text-white/30 mt-1 truncate max-w-full" title={d.label}>{d.label}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
     </div>
   )
 }
