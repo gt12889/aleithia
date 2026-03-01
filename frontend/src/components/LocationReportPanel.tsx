@@ -146,39 +146,16 @@ function buildRisks(data: NeighborhoodData | null, profile: UserProfile): Signal
   return combined.slice(0, 2)
 }
 
-function buildSummary(profile: UserProfile, data: NeighborhoodData | null, riskScore: RiskScore | null): string {
-  if (!data) {
-    return `Preparing a location report for ${profile.business_type} in ${profile.neighborhood}.`
-  }
-
-  const totalSignals =
-    data.inspection_stats.total +
-    data.permit_count +
-    data.license_count +
-    (data.news.length || 0) +
-    (data.politics.length || 0) +
-    (data.reviews?.length || 0) +
-    (data.traffic?.length || 0)
-
-  const posture = riskScore
-    ? riskScore.overall_score <= 4
-      ? 'favorable'
-      : riskScore.overall_score <= 7
-        ? 'mixed'
-        : 'higher-risk'
-    : 'mixed'
-
-  return `${profile.neighborhood} looks ${posture} for a ${profile.business_type.toLowerCase()} launch based on ${totalSignals} local signals. Prioritize quick validation on the highlighted risks while leveraging the strongest demand/compliance advantages.`
-}
-
 function safeNumber(value: number | undefined): string {
   return typeof value === 'number' ? `${value}` : 'N/A'
 }
 
-export default function LocationReportPanel({ profile, neighborhoodData, riskScore, loading, agentInfo }: Props) {
+export default function LocationReportPanel({ profile, neighborhoodData, riskScore, loading, agentInfo: _agentInfo }: Props) {
   const advantages = buildAdvantages(neighborhoodData, profile)
   const risks = buildRisks(neighborhoodData, profile)
-  const summary = buildSummary(profile, neighborhoodData, riskScore)
+  const conservativeInsights = neighborhoodData
+    ? computeInsights(neighborhoodData, profile, 'conservative')
+    : null
 
   const handleDownloadPdf = () => {
     if (loading) return
@@ -226,45 +203,6 @@ export default function LocationReportPanel({ profile, neighborhoodData, riskSco
     }
 
     const dateLabel = new Date().toLocaleString()
-    const rating = neighborhoodData?.metrics?.avg_review_rating
-    const stats = neighborhoodData?.inspection_stats
-    const passRate = stats && stats.total > 0 ? Math.round((stats.passed / stats.total) * 100) : null
-    const failRate = stats && stats.total > 0 ? Math.round((stats.failed / stats.total) * 100) : null
-    const congestedCount = (neighborhoodData?.traffic || []).filter((t) => {
-      const level = (t.metadata?.congestion_level as string | undefined)?.toLowerCase()
-      return level === 'heavy' || level === 'blocked'
-    }).length
-
-    const detailedAdvantages = [
-      passRate !== null && stats
-        ? `Regulatory baseline: ${stats.passed} of ${stats.total} inspections passed (${passRate}%), which may support smoother launch operations.`
-        : null,
-      typeof rating === 'number' && rating > 0
-        ? `Demand signal: local review sentiment averages ${rating.toFixed(1)}/5 across ${neighborhoodData?.reviews?.length || 0} records.`
-        : null,
-      neighborhoodData?.cctv?.cameras.length
-        ? `Street activity: ${neighborhoodData.cctv.cameras.length} nearby CCTV points report ${neighborhoodData.cctv.density} traffic density with ~${neighborhoodData.cctv.avg_pedestrians} average pedestrians.`
-        : null,
-      neighborhoodData && neighborhoodData.permit_count > 0
-        ? `Investment velocity: ${neighborhoodData.permit_count} active permits suggest current reinvestment in the area.`
-        : null,
-    ].filter((v): v is string => Boolean(v))
-
-    const detailedRisks = [
-      failRate !== null && stats
-        ? `Compliance exposure: ${stats.failed} failed inspections out of ${stats.total} (${failRate}%) may indicate tighter enforcement expectations.`
-        : null,
-      neighborhoodData && neighborhoodData.license_count > 0
-        ? `Competitive pressure: ${neighborhoodData.license_count} active licenses increase the need for differentiation and pricing discipline.`
-        : null,
-      congestedCount > 0
-        ? `Mobility friction: ${congestedCount} congested traffic zones may affect logistics, delivery times, and customer access.`
-        : null,
-      typeof rating === 'number' && rating > 0 && rating < 3.8
-        ? `Consumer expectation risk: average rating at ${rating.toFixed(1)}/5 can imply stricter quality benchmarks for new entrants.`
-        : null,
-    ].filter((v): v is string => Boolean(v))
-
     doc.setFont('helvetica', 'bold')
     doc.setFontSize(18)
     doc.text('Alethia Report Summary', marginX, y)
@@ -277,34 +215,36 @@ export default function LocationReportPanel({ profile, neighborhoodData, riskSco
     doc.text(`Generated: ${dateLabel}`, marginX, y)
     y += 16
 
-    addHeading('Executive Summary')
-    addParagraph(summary)
-
-    addHeading('Agent Intelligence')
-    if (agentInfo) {
-      addParagraph(`Agents deployed: ${agentInfo.agents_deployed} | Neighborhoods analyzed: ${agentInfo.neighborhoods.length} | Data points: ${agentInfo.data_points}`)
-      if (agentInfo.agent_summaries.length > 0) {
-        addParagraph('Top contributing agents:')
-        agentInfo.agent_summaries.slice(0, 8).forEach((agent) => {
-          addBullet(`${agent.name}: ${agent.data_points} points${agent.sources?.length ? ` (${agent.sources.join(', ')})` : ''}`)
-        })
-      }
+    addHeading('Business Intelligence Score (Conservative Profile)')
+    if (conservativeInsights) {
+      addParagraph(`Overall score: ${conservativeInsights.overall}/100 across ${conservativeInsights.coverageCount} of 6 categories.`)
     } else {
-      addParagraph('Agent summary unavailable for this run. Pipeline metrics are shown from loaded neighborhood signals.')
+      addParagraph('Business Intelligence Score is unavailable because neighborhood data has not loaded.')
     }
 
-    addHeading('Detailed Advantages')
-    if (detailedAdvantages.length > 0) {
-      detailedAdvantages.forEach(addBullet)
+    addHeading('Top Advantages (BIS-Driven)')
+    if (advantages.length > 0) {
+      advantages.forEach((item) => addBullet(`${item.title}: ${item.detail}`))
     } else {
       addBullet('No strong upside concentration detected; proceed with controlled pilot testing.')
     }
 
-    addHeading('Detailed Risks')
-    if (detailedRisks.length > 0) {
-      detailedRisks.forEach(addBullet)
+    addHeading('Top Risks (BIS-Driven)')
+    if (risks.length > 0) {
+      risks.forEach((item) => addBullet(`${item.title}: ${item.detail}`))
     } else {
       addBullet('No single dominant risk detected; continue validation for category-specific constraints.')
+    }
+
+    addHeading('Category Breakdown')
+    if (conservativeInsights && conservativeInsights.categories.length > 0) {
+      const ranked = [...conservativeInsights.categories].sort((a, b) => b.score - a.score)
+      ranked.forEach((cat) => {
+        const label = CATEGORY_TITLES[cat.id] ?? cat.name
+        addBullet(`${label}: ${cat.score}/100 (${cat.signalLabel}) — ${cat.claim}`)
+      })
+    } else {
+      addBullet('No category-level Business Intelligence Scores are available for this location yet.')
     }
 
     addHeading('Data Snapshot')
