@@ -320,37 +320,6 @@ export default function LocationReportPanel({ profile, neighborhoodData, riskSco
           <div className="text-xs text-white/40 font-mono">Generating report from live pipeline signals…</div>
         ) : (
           <>
-            {agentInfo && (
-              <div className="border border-cyan-500/20 bg-cyan-500/[0.04] p-3">
-                <p className="text-[10px] font-mono uppercase tracking-wider text-cyan-200/75 mb-2">Agent Intelligence</p>
-                <div className="grid grid-cols-3 gap-2 mb-3">
-                  <div>
-                    <p className="text-[10px] font-mono text-white/35 uppercase">Agents</p>
-                    <p className="text-sm font-semibold text-white">{agentInfo.agents_deployed}</p>
-                  </div>
-                  <div>
-                    <p className="text-[10px] font-mono text-white/35 uppercase">Neighborhoods</p>
-                    <p className="text-sm font-semibold text-white">{agentInfo.neighborhoods.length}</p>
-                  </div>
-                  <div>
-                    <p className="text-[10px] font-mono text-white/35 uppercase">Data points</p>
-                    <p className="text-sm font-semibold text-white">{agentInfo.data_points}</p>
-                  </div>
-                </div>
-
-                {agentInfo.agent_summaries.length > 0 && (
-                  <div className="space-y-1.5">
-                    {agentInfo.agent_summaries.slice(0, 4).map((agent) => (
-                      <div key={agent.name} className="flex items-center justify-between text-[11px] border border-white/10 px-2 py-1.5">
-                        <span className="text-white/70 capitalize">{agent.name}</span>
-                        <span className="font-mono text-white/85">{agent.data_points}</span>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-            )}
-
             <div>
               <p className="text-[10px] font-mono uppercase tracking-wider text-emerald-300/70 mb-2">Advantages</p>
               <div className="space-y-2">
