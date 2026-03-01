@@ -65,14 +65,19 @@ export default function MemoryGraphPage({ onBack }: Props) {
       .then((data) => {
         const d = data as Record<string, unknown>
         const pagination = d.pagination as { totalPages?: number } | undefined
-        let raw = (d.documents ?? d.memories ?? d.data) as Record<string, unknown>[] | undefined
-        if (Array.isArray(raw)) {
-          // already an array
-        } else if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
-          const inner = (raw as Record<string, unknown>).documents ?? (raw as Record<string, unknown>).memories
+        let raw: Record<string, unknown>[] | undefined
+        const top = d.documents ?? d.memories ?? d.data ?? d.result
+        if (Array.isArray(top)) {
+          raw = top
+        } else if (top && typeof top === 'object' && !Array.isArray(top)) {
+          const inner = (top as Record<string, unknown>).documents ?? (top as Record<string, unknown>).memories ?? (top as Record<string, unknown>).items
           raw = Array.isArray(inner) ? inner : []
         } else {
           raw = []
+        }
+        if (import.meta.env.DEV && raw.length === 0) {
+          // eslint-disable-next-line no-console
+          console.debug('[MemoryGraph] 0 docs parsed; raw response keys:', Object.keys(d))
         }
         setDocuments(normalizeDocs(raw))
         setHasMore(pagination ? pagination.totalPages > 1 : false)
@@ -102,11 +107,14 @@ export default function MemoryGraphPage({ onBack }: Props) {
       const data = await api.graph({ page: nextPage, limit: PAGE_SIZE })
       const d = data as Record<string, unknown>
       const pagination = d.pagination as { totalPages?: number } | undefined
-      let raw = (d.documents ?? d.memories ?? d.data) as Record<string, unknown>[] | undefined
-      if (!Array.isArray(raw) && raw && typeof raw === 'object') {
-        const inner = (raw as Record<string, unknown>).documents ?? (raw as Record<string, unknown>).memories
+      let raw: Record<string, unknown>[] | undefined
+      const top = d.documents ?? d.memories ?? d.data ?? d.result
+      if (Array.isArray(top)) {
+        raw = top
+      } else if (top && typeof top === 'object' && !Array.isArray(top)) {
+        const inner = (top as Record<string, unknown>).documents ?? (top as Record<string, unknown>).memories ?? (top as Record<string, unknown>).items
         raw = Array.isArray(inner) ? inner : []
-      } else if (!Array.isArray(raw)) {
+      } else {
         raw = []
       }
       setDocuments((prev) => [...prev, ...normalizeDocs(raw)])

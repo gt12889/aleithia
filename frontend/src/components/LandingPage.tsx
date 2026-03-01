@@ -1,4 +1,4 @@
-import { Suspense } from 'react'
+import { Suspense, useEffect, useState } from 'react'
 import { SignedIn, SignedOut, SignInButton, SignUpButton, useUser } from '@clerk/clerk-react'
 import Spline from '@splinetool/react-spline'
 import type { Application } from '@splinetool/runtime'
@@ -97,16 +97,58 @@ const DATA_PILLARS = [
   },
 ]
 
+const MIN_LOAD_TIME_MS = 700
+const MAX_LOAD_TIME_MS = 5000
+
 export default function LandingPage({ onGetStarted, onViewSource }: Props) {
   const { user } = useUser()
+  const [isReady, setIsReady] = useState(false)
+  const [heroLoaded, setHeroLoaded] = useState(false)
+  const [minTimeElapsed, setMinTimeElapsed] = useState(false)
+
+  useEffect(() => {
+    const t = setTimeout(() => setMinTimeElapsed(true), MIN_LOAD_TIME_MS)
+    return () => clearTimeout(t)
+  }, [])
+
+  useEffect(() => {
+    const t = setTimeout(() => setIsReady(true), MAX_LOAD_TIME_MS)
+    return () => clearTimeout(t)
+  }, [])
+
+  useEffect(() => {
+    if (heroLoaded && minTimeElapsed) setIsReady(true)
+  }, [heroLoaded, minTimeElapsed])
+
+  const handleHeroLoad = (app: Application) => {
+    tuneScene(app)
+    setHeroLoaded(true)
+  }
+
   return (
-    <div className="bg-[#06080d] text-white">
+    <div className="bg-[#06080d] text-white relative">
+      {/* Loading overlay — hides content until hero + min time */}
+      <div
+        className={`fixed inset-0 z-[100] bg-[#06080d] flex flex-col items-center justify-center text-white transition-opacity duration-500 ${
+          isReady ? 'opacity-0 pointer-events-none' : 'opacity-100'
+        }`}
+        aria-hidden={isReady}
+      >
+        <p className="text-xs font-mono font-medium uppercase tracking-[0.3em] text-white/40 mb-4">
+          Business Intelligence Platform
+        </p>
+        <h1 className="text-4xl sm:text-6xl font-bold tracking-tight mb-6">
+          ALETHIA
+        </h1>
+        <div className="w-8 h-8 border-2 border-white/20 border-t-white/70 rounded-full animate-spin" />
+      </div>
+
       {/* ── Hero ── */}
       <section className="relative min-h-screen overflow-hidden">
         <div className="absolute inset-0 z-0">
           <Spline
             scene="https://prod.spline.design/Mt-87SuFLZp8yZiy/scene.splinecode"
-            onLoad={(app) => tuneScene(app)}
+            onLoad={handleHeroLoad}
           />
         </div>
 

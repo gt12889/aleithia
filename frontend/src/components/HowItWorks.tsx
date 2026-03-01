@@ -82,11 +82,14 @@ export default function HowItWorks({ onBack }: Props) {
       .then((data) => {
         const d = data as Record<string, unknown>
         const pagination = d.pagination as { totalPages?: number } | undefined
-        let raw = (d.documents ?? d.memories ?? d.data) as Record<string, unknown>[] | undefined
-        if (!Array.isArray(raw) && raw && typeof raw === 'object') {
-          const inner = (raw as Record<string, unknown>).documents ?? (raw as Record<string, unknown>).memories
+        let raw: Record<string, unknown>[] | undefined
+        const top = d.documents ?? d.memories ?? d.data ?? d.result
+        if (Array.isArray(top)) {
+          raw = top
+        } else if (top && typeof top === 'object' && !Array.isArray(top)) {
+          const inner = (top as Record<string, unknown>).documents ?? (top as Record<string, unknown>).memories ?? (top as Record<string, unknown>).items
           raw = Array.isArray(inner) ? inner : []
-        } else if (!Array.isArray(raw)) {
+        } else {
           raw = []
         }
         setDocuments(normalizeDocs(raw))
@@ -108,11 +111,14 @@ export default function HowItWorks({ onBack }: Props) {
       const data = await api.graph({ page: nextPage, limit: PAGE_SIZE })
       const d = data as Record<string, unknown>
       const pagination = d.pagination as { totalPages?: number } | undefined
-      let raw = (d.documents ?? d.memories ?? d.data) as Record<string, unknown>[] | undefined
-      if (!Array.isArray(raw) && raw && typeof raw === 'object') {
-        const inner = (raw as Record<string, unknown>).documents ?? (raw as Record<string, unknown>).memories
+      let raw: Record<string, unknown>[] | undefined
+      const top = d.documents ?? d.memories ?? d.data ?? d.result
+      if (Array.isArray(top)) {
+        raw = top
+      } else if (top && typeof top === 'object' && !Array.isArray(top)) {
+        const inner = (top as Record<string, unknown>).documents ?? (top as Record<string, unknown>).memories ?? (top as Record<string, unknown>).items
         raw = Array.isArray(inner) ? inner : []
-      } else if (!Array.isArray(raw)) {
+      } else {
         raw = []
       }
       setDocuments((prev) => [...prev, ...normalizeDocs(raw)])
