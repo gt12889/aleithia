@@ -3,10 +3,13 @@ import os
 from unittest.mock import patch
 
 
-def test_vectordb_available_returns_false_without_service():
-    """vectordb_available() returns False when no VectorDB service is reachable."""
+def test_vectordb_available_returns_true_by_default():
+    """vectordb_available() returns True when VECTORDB_DISABLED is not set."""
     from modal_app.vectordb import vectordb_available
-    assert vectordb_available() is False
+    with patch.dict(os.environ, {}, clear=False):
+        # Remove VECTORDB_DISABLED if set
+        os.environ.pop("VECTORDB_DISABLED", None)
+        assert vectordb_available() is True
 
 
 def test_vectordb_available_env_override():
@@ -66,6 +69,15 @@ def test_build_embed_text():
     assert len(text) <= len("My Title ") + 1000
 
 
+def test_build_embed_text_handles_none_content():
+    """build_embed_text handles None content gracefully."""
+    from modal_app.vectordb import build_embed_text
+
+    doc = {"title": "Title Only", "content": None}
+    text = build_embed_text(doc)
+    assert text == "Title Only"
+
+
 def test_classify_vectordb_upsert_builds_correct_batch():
     """Verify classify pipeline builds correct embed texts and payloads for VectorDB."""
     from modal_app.vectordb import build_embed_text, build_payload
@@ -105,3 +117,11 @@ def test_classify_vectordb_upsert_builds_correct_batch():
     assert payloads[0]["neighborhood"] == "Wicker Park"
     assert payloads[0]["category"] == "economic"
     assert payloads[1]["sentiment_label"] == "neutral"
+
+
+def test_check_vectordb_health_returns_not_configured_when_disabled():
+    """check_vectordb_health returns not_configured when VECTORDB_DISABLED=1."""
+    from modal_app.vectordb import check_vectordb_health
+    with patch.dict(os.environ, {"VECTORDB_DISABLED": "1"}):
+        result = check_vectordb_health()
+        assert result["status"] == "not_configured"

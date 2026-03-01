@@ -13,18 +13,14 @@ import os
 # Availability guard (same pattern as openai_utils.py)
 # ---------------------------------------------------------------------------
 
-_vectordb_healthy = False
-
 
 def vectordb_available() -> bool:
-    """Check if VectorAI DB service is reachable and healthy.
+    """Check if VectorAI DB integration is enabled.
 
-    Returns False if VECTORDB_DISABLED=1 env var is set or if no
-    VectorDB container has registered as healthy.
+    Returns False if VECTORDB_DISABLED=1 env var is set.
+    Each call site wraps VectorDB calls in try/except for runtime failures.
     """
-    if os.environ.get("VECTORDB_DISABLED", "").strip() == "1":
-        return False
-    return _vectordb_healthy
+    return os.environ.get("VECTORDB_DISABLED", "").strip() != "1"
 
 
 # ---------------------------------------------------------------------------
@@ -53,9 +49,25 @@ def build_payload(doc: dict, classification: dict, sentiment: dict) -> dict:
 
 def build_embed_text(doc: dict) -> str:
     """Build text string for embedding from doc title + truncated content."""
-    title = doc.get("title", "")
-    content = doc.get("content", "")[:EMBED_CONTENT_LIMIT]
+    title = doc.get("title") or ""
+    content = (doc.get("content") or "")[:EMBED_CONTENT_LIMIT]
     return f"{title} {content}".strip()
+
+
+def check_vectordb_health() -> dict:
+    """Check VectorDB health from any consumer container.
+
+    Safe to call from web endpoints, reconciler, etc.
+    """
+    try:
+        if not vectordb_available():
+            return {"status": "not_configured"}
+        import modal as _modal
+        vdb_cls = _modal.Cls.from_name("alethia", "VectorDBService")
+        vdb = vdb_cls()
+        return vdb.health_check.remote()
+    except Exception as e:
+        return {"status": "unavailable", "error": str(e)}
 
 
 # ---------------------------------------------------------------------------
@@ -140,9 +152,6 @@ class VectorDBService:
                     distance_metric=DistanceMetric.COSINE,
                 )
 
-        # Mark as healthy
-        global _vectordb_healthy
-        _vectordb_healthy = True
         print(f"VectorAI DB ready: {len(COLLECTIONS)} collections initialized")
 
     @modal.method()
@@ -253,23 +262,16 @@ class VectorDBService:
 
     @modal.method()
     def search_neighborhood(self, query_embedding: list[float], neighborhood: str, top_k: int = 50) -> list[dict]:
-        """Convenience: search enriched collection filtered by neighborhood."""
-        span_ctx = self._tracer.start_as_current_span("vectordb.search_neighborhood") if self._tracer else None
-        span = span_ctx.__enter__() if span_ctx else None
-        try:
-            results = self.search.local(
-                query_embedding=query_embedding,
-                collection="enriched",
-                top_k=top_k,
-                filter_dict={"neighborhood": neighborhood},
-            )
-            if span:
-                span.set_attribute("vectordb.neighborhood", neighborhood)
-                span.set_attribute("vectordb.results_count", len(results))
-            return results
-        finally:
-            if span_ctx:
-                span_ctx.__exit__(None, None, None)
+        """Convenience: search enriched collection filtered by neighborhood.
+
+        Delegates to search.local() which handles its own tracing span.
+        """
+        return self.search.local(
+            query_embedding=query_embedding,
+            collection="enriched",
+            top_k=top_k,
+            filter_dict={"neighborhood": neighborhood},
+        )
 
     @modal.method()
     def health_check(self) -> dict:
@@ -321,7 +323,8 @@ async def backfill_vectordb():
     json_files = list(enriched_dir.rglob("*.json"))
     print(f"Backfill: found {len(json_files)} enriched documents")
 
-    vdb = VectorDBService()
+    vdb_cls = modal.Cls.from_name("alethia", "VectorDBService")
+    vdb = vdb_cls()
     batch_size = 32
     total_upserted = 0
 

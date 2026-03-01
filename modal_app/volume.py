@@ -137,6 +137,7 @@ parking_image = (
 vectordb_image = (
     modal.Image.from_registry("williamimoh/actian-vectorai-db:1.0b")
     .pip_install(
+        "actiancortex",
         "sentence-transformers==3.3.1",
         "torch>=2.4.0",
         "grpcio>=1.60.0",
