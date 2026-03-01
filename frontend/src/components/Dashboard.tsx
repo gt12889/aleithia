@@ -1,4 +1,5 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useMemo } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { SignedIn, SignedOut, SignInButton, SignUpButton, useClerk, useUser } from '@clerk/clerk-react'
 import type { UserProfile, NeighborhoodData, DataSources, ChatMessage, RiskScore } from '../types/index.ts'
 import { api, streamChat } from '../api.ts'
@@ -18,8 +19,8 @@ import TrafficCard from './TrafficCard.tsx'
 import DemographicsCard from './DemographicsCard.tsx'
 import PipelineMonitor from './PipelineMonitor.tsx'
 import MLMonitor from './MLMonitor.tsx'
-// CCTVFeedCard disabled — component not yet created
-// import CCTVFeedCard from './CCTVFeedCard.tsx'
+import CCTVFeedCard from './CCTVFeedCard.tsx'
+import InsightsCard from './InsightsCard.tsx'
 
 type Tab = 'overview' | 'inspections' | 'permits' | 'licenses' | 'news' | 'community' | 'market' | 'models'
 
@@ -172,6 +173,7 @@ interface Props {
 export default function Dashboard({ profile, onReset }: Props) {
   const { signOut } = useClerk()
   const { user } = useUser()
+  const navigate = useNavigate()
   const [neighborhoodData, setNeighborhoodData] = useState<NeighborhoodData | null>(null)
   const [sources, setSources] = useState<DataSources | null>(null)
   const [riskScore, setRiskScore] = useState<RiskScore | null>(null)
@@ -357,16 +359,37 @@ export default function Dashboard({ profile, onReset }: Props) {
     }
   }
 
-  const tabs: { key: Tab; label: string; count?: number }[] = [
+  const allTabs: { key: Tab; label: string; count?: number; isEmpty?: () => boolean }[] = [
     { key: 'overview', label: 'Overview' },
-    { key: 'inspections', label: 'Inspections', count: neighborhoodData?.inspection_stats.total },
-    { key: 'permits', label: 'Permits', count: neighborhoodData?.permit_count },
-    { key: 'licenses', label: 'Licenses', count: neighborhoodData?.license_count },
-    { key: 'news', label: 'Intel', count: (neighborhoodData?.news.length || 0) + (neighborhoodData?.politics.length || 0) },
-    { key: 'community', label: 'Community', count: (neighborhoodData?.reddit?.length || 0) + (neighborhoodData?.tiktok?.length || 0) },
-    { key: 'market', label: 'Market', count: (neighborhoodData?.reviews?.length || 0) + (neighborhoodData?.realestate?.length || 0) },
+    { key: 'inspections', label: 'Inspections', count: neighborhoodData?.inspection_stats.total, isEmpty: () => !(neighborhoodData?.inspection_stats.total ?? 0) },
+    { key: 'permits', label: 'Permits', count: neighborhoodData?.permit_count, isEmpty: () => !(neighborhoodData?.permit_count ?? 0) },
+    { key: 'licenses', label: 'Licenses', count: neighborhoodData?.license_count, isEmpty: () => !(neighborhoodData?.license_count ?? 0) },
+    { key: 'news', label: 'Intel', count: (neighborhoodData?.news.length || 0) + (neighborhoodData?.politics.length || 0), isEmpty: () => !((neighborhoodData?.news.length || 0) + (neighborhoodData?.politics.length || 0)) },
+    { key: 'community', label: 'Community', count: (neighborhoodData?.reddit?.length || 0) + (neighborhoodData?.tiktok?.length || 0), isEmpty: () => !((neighborhoodData?.reddit?.length || 0) + (neighborhoodData?.tiktok?.length || 0)) },
+    { key: 'market', label: 'Market', count: (neighborhoodData?.reviews?.length || 0) + (neighborhoodData?.realestate?.length || 0), isEmpty: () => !((neighborhoodData?.reviews?.length || 0) + (neighborhoodData?.realestate?.length || 0)) },
     { key: 'models', label: 'Models' },
   ]
+  const tabs = useMemo(
+    () => allTabs.filter(t => !t.isEmpty || !(t.isEmpty?.() ?? false)),
+    [
+      neighborhoodData?.inspection_stats.total,
+      neighborhoodData?.permit_count,
+      neighborhoodData?.license_count,
+      neighborhoodData?.news.length,
+      neighborhoodData?.politics.length,
+      neighborhoodData?.reddit?.length,
+      neighborhoodData?.tiktok?.length,
+      neighborhoodData?.reviews?.length,
+      neighborhoodData?.realestate?.length,
+    ]
+  )
+  const visibleTabKeys = useMemo(() => tabs.map(t => t.key), [tabs])
+
+  useEffect(() => {
+    if (!visibleTabKeys.includes(activeTab)) {
+      setActiveTab(visibleTabKeys.includes('overview') ? 'overview' : (visibleTabKeys[0] ?? 'overview'))
+    }
+  }, [visibleTabKeys, activeTab])
 
   return (
     <div className="h-screen flex flex-col bg-[#06080d]">
@@ -406,6 +429,9 @@ export default function Dashboard({ profile, onReset }: Props) {
 
           <SignedIn>
             {user && <span className="text-[10px] font-mono text-white/25">{user.primaryEmailAddress?.emailAddress}</span>}
+            <button onClick={() => navigate('/profile')} className="text-[10px] font-mono uppercase tracking-wider text-white/20 hover:text-white/50 transition-colors cursor-pointer">
+              Profile
+            </button>
             <button onClick={() => signOut()} className="text-[10px] font-mono uppercase tracking-wider text-white/20 hover:text-white/50 transition-colors cursor-pointer">
               Sign out
             </button>
@@ -479,11 +505,17 @@ export default function Dashboard({ profile, onReset }: Props) {
                     )}
                   </div>
 
+                  {neighborhoodData && (
+                    <InsightsCard data={neighborhoodData} profile={profile} />
+                  )}
+
                   {neighborhoodData?.traffic && neighborhoodData.traffic.length > 0 && (
                     <TrafficCard data={neighborhoodData.traffic} />
                   )}
 
-                  {/* CCTVFeedCard disabled — component not yet created */}
+                  {neighborhoodData?.cctv && neighborhoodData.cctv.cameras.length > 0 && (
+                    <CCTVFeedCard cctv={neighborhoodData.cctv} />
+                  )}
 
                   {neighborhoodData && (
                     <div className="grid grid-cols-3 lg:grid-cols-7 gap-3">

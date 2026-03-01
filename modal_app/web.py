@@ -1295,35 +1295,74 @@ async def geo():
 
 
 @web_app.get("/graph")
-async def graph(page: int = 1, limit: int = 500):
+async def graph(page: int = 1, limit: int = 200):
     """Proxy to Supermemory list documents for Memory Graph visualization."""
+    empty = {"documents": [], "pagination": {"currentPage": 1, "totalPages": 0}}
     api_key = os.environ.get("SUPERMEMORY_API_KEY", "")
     if not api_key:
-        return JSONResponse(
-            {"documents": [], "pagination": {"currentPage": 1, "totalPages": 0}},
-            status_code=200,
-        )
+        return JSONResponse(empty, status_code=200)
     import httpx
-    async with httpx.AsyncClient(timeout=30) as client:
-        resp = await client.post(
-            "https://api.supermemory.ai/v3/documents/list",
-            headers={
-                "Content-Type": "application/json",
-                "Authorization": f"Bearer {api_key}",
-            },
-            json={
-                "page": page,
-                "limit": limit,
-                "sort": "createdAt",
-                "order": "desc",
-            },
-        )
-        resp.raise_for_status()
-        data = resp.json()
-        # Memory Graph expects 'documents'; Supermemory list returns 'memories'
-        if "memories" in data and "documents" not in data:
-            data["documents"] = data["memories"]
-        return data
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            resp = await client.post(
+                "https://api.supermemory.ai/v3/documents/documents",
+                headers={
+                    "Content-Type": "application/json",
+                    "Authorization": f"Bearer {api_key}",
+                },
+                json={
+                    "page": page,
+                    "limit": min(limit, 200),  # Supermemory max is 200
+                    "sort": "createdAt",
+                    "order": "desc",
+                },
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            # Memory Graph expects 'documents'; Supermemory may return 'memories'
+            if "memories" in data and "documents" not in data:
+                data["documents"] = data["memories"]
+            return data
+    except Exception as e:
+        print(f"Supermemory /graph error: {e}")
+        return JSONResponse(empty, status_code=200)
+
+
+@web_app.get("/gpu-metrics")
+async def gpu_metrics():
+    """Live GPU utilization from active containers."""
+    import asyncio
+
+    results = {
+        "h100_llm": {"status": "cold"},
+        "t4_classifier": {"status": "cold"},
+        "t4_sentiment": {"status": "cold"},
+        "t4_cctv": {"status": "cold"},
+    }
+
+    # Only query non-batched GPU classes (batched classes can't have extra methods)
+    gpu_classes = [
+        ("AlethiaLLM", "h100_llm"),
+        ("TrafficAnalyzer", "t4_cctv"),
+    ]
+
+    async def _fetch(cls_name: str, key: str):
+        try:
+            cls = modal.Cls.from_name("alethia", cls_name)
+            instance = cls()
+            metrics = await asyncio.wait_for(
+                instance.gpu_metrics.remote.aio(), timeout=8,
+            )
+            results[key] = metrics
+        except Exception:
+            pass
+
+    await asyncio.gather(
+        *[_fetch(name, key) for name, key in gpu_classes],
+        return_exceptions=True,
+    )
+
+    return results
 
 
 @web_app.get("/health")
@@ -1352,6 +1391,7 @@ async def demo_scale(request: Request):
     image=web_image,
     volumes={"/data": volume},
     secrets=[modal.Secret.from_name("alethia-secrets"), modal.Secret.from_name("arize-secrets")],
+    min_containers=1,
 )
 @modal.asgi_app()
 def serve():
