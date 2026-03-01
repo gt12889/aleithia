@@ -34,18 +34,7 @@ export default function StreetscapeCard({ neighborhood }: Props) {
     )
   }
 
-  if (!data) {
-    return (
-      <div className="border border-white/[0.06] bg-white/[0.02] p-5">
-        <h3 className="text-[10px] font-mono font-medium uppercase tracking-wider text-white/30 mb-3">
-          Streetscape Intelligence
-        </h3>
-        <div className="text-[10px] font-mono text-white/15 text-center py-4">
-          Run vision pipeline with a YouTube walking tour URL to populate
-        </div>
-      </div>
-    )
-  }
+  if (!data) return null
 
   const { counts, indicators } = data
 
