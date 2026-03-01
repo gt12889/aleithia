@@ -241,7 +241,7 @@ export default function LandingPage({ onGetStarted }: Props) {
           <p className="text-xs font-mono text-white/20">
             Built at HackIllinois 2026
           </p>
-          <p className="text-xs font-mono text-white/20">
+          <p className="text-xs font-mono text-white/20">mkmok
             Chicago Open Data / Reddit / Yelp / Legistar
           </p>
         </div>
