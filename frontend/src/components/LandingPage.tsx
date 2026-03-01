@@ -189,9 +189,7 @@ export default function LandingPage({ onGetStarted, onViewSource, onViewWhyUs }:
                 />
               </h1>
               <p className="text-base sm:text-lg text-white/50 mb-12 max-w-xl mx-auto leading-relaxed">
-                Live data sources,
-                opportunity briefs, and neighborhood insights — before you sign
-                the lease.
+                Enterprise-grade intelligence for small businesses.
               </p>
               <div className="flex items-center justify-center gap-4">
                 <button
