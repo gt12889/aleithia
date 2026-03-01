@@ -21,8 +21,15 @@ from pydantic import BaseModel, Field
 
 from modal_app.volume import app, volume, web_image, sandbox_image, VOLUME_MOUNT, RAW_DATA_PATH, PROCESSED_DATA_PATH
 from modal_app.common import CHICAGO_NEIGHBORHOODS, COMMUNITY_AREA_MAP, NON_SENSOR_PIPELINE_SOURCES, detect_neighborhood, neighborhood_to_ca
+from modal_app.pipelines.reddit import (
+    FALLBACK_BUDGET_MS,
+    merge_rank_reddit_docs,
+    rank_reddit_docs,
+    reddit_docs_are_weak,
+    search_reddit_fallback_runtime,
+)
 
-web_app = FastAPI(title="Alethia API", version="2.0")
+web_app = FastAPI(title="Aleithia API", version="2.0")
 
 web_app.add_middleware(
     CORSMiddleware,
@@ -34,7 +41,7 @@ web_app.add_middleware(
 
 
 # Profile refresh throttling for background TikTok fetches.
-tiktok_refresh_dict = modal.Dict.from_name("alethia-tiktok-refresh", create_if_missing=True)
+tiktok_refresh_dict = modal.Dict.from_name("aleithia-tiktok-refresh", create_if_missing=True)
 TIKTOK_REFRESH_COOLDOWN_SECONDS = 30 * 60
 TIKTOK_PROFILE_STALE_SECONDS = 6 * 60 * 60
 TIKTOK_TARGET_COUNT = 5
@@ -56,6 +63,17 @@ def _load_docs(source: str, limit: int = 200) -> list[dict]:
             print(f"_load_docs [{source}]: corrupted JSON {json_file.name}: {e}")
             continue
     return docs
+
+
+async def _spawn_reddit_fallback_persist(docs: list[dict]) -> None:
+    """Fire-and-forget persistence for query-time fallback Reddit hits."""
+    if not docs:
+        return
+    try:
+        persist_fn = modal.Function.from_name("aleithia", "persist_reddit_fallback_batch")
+        await persist_fn.spawn.aio(docs=docs)
+    except Exception as exc:
+        print(f"Reddit fallback persist spawn failed: {exc}")
 
 
 _COUNT_ONLY_RE = re.compile(r"^\s*\d[\d,.\s]*[KMBkmb]?\s*$")
@@ -615,7 +633,7 @@ def _compute_metrics(name: str, inspections: list, permits: list, licenses: list
 async def chat(request: Request):
     """Streaming chat endpoint — orchestrates agent swarm + streams LLM tokens via SSE."""
     from modal_app.instrumentation import get_tracer
-    tracer = get_tracer("alethia.web")
+    tracer = get_tracer("aleithia.web")
 
     body = await request.json()
     question = body.get("message", "")
@@ -643,7 +661,7 @@ async def chat(request: Request):
                 span.set_attribute("chat.neighborhood", neighborhood)
             # Phase 1: Agent gathering (returns synthesis_messages, NOT response text)
             from modal_app.instrumentation import inject_context
-            orchestrate_query = modal.Function.from_name("alethia", "orchestrate_query")
+            orchestrate_query = modal.Function.from_name("aleithia", "orchestrate_query")
             result = await orchestrate_query.remote.aio(
                 user_id=user_id,
                 question=question,
@@ -676,7 +694,7 @@ async def chat(request: Request):
             yield f"data: {json.dumps({'type': 'status', 'content': 'Synthesizing intelligence report...'})}\n\n"
 
             # Phase 2: Real LLM streaming
-            llm_cls = modal.Cls.from_name("alethia", "AlethiaLLM")
+            llm_cls = modal.Cls.from_name("aleithia", "AleithiaLLM")
             llm = llm_cls()
             messages = result["synthesis_messages"]
 
@@ -722,7 +740,7 @@ async def chat(request: Request):
 async def brief(neighborhood: str, business_type: str = "Restaurant"):
     """Get intelligence brief for a neighborhood."""
     from modal_app.instrumentation import get_tracer
-    tracer = get_tracer("alethia.web")
+    tracer = get_tracer("aleithia.web")
 
     span_ctx = tracer.start_as_current_span("brief-request") if tracer else None
     span = span_ctx.__enter__() if span_ctx else None
@@ -734,7 +752,7 @@ async def brief(neighborhood: str, business_type: str = "Restaurant"):
             span.set_attribute("brief.business_type", business_type)
 
         from modal_app.instrumentation import inject_context
-        neighborhood_intel_agent = modal.Function.from_name("alethia", "neighborhood_intel_agent")
+        neighborhood_intel_agent = modal.Function.from_name("aleithia", "neighborhood_intel_agent")
         result = await neighborhood_intel_agent.remote.aio(
             neighborhood=neighborhood,
             business_type=business_type,
@@ -808,7 +826,7 @@ async def status():
     # Cost tracking
     costs = {}
     try:
-        cost_dict = modal.Dict.from_name("alethia-costs", create_if_missing=True)
+        cost_dict = modal.Dict.from_name("aleithia-costs", create_if_missing=True)
         async for key in cost_dict.keys.aio():
             costs[key] = await cost_dict.get.aio(key)
     except Exception:
@@ -1024,7 +1042,7 @@ async def _maybe_spawn_tiktok_profile_refresh(
 async def neighborhood(name: str, business_type: str = ""):
     """Full neighborhood data profile."""
     from modal_app.instrumentation import get_tracer
-    tracer = get_tracer("alethia.web")
+    tracer = get_tracer("aleithia.web")
 
     span_ctx = tracer.start_as_current_span("neighborhood-profile") if tracer else None
     span = span_ctx.__enter__() if span_ctx else None
@@ -1081,7 +1099,12 @@ async def neighborhood(name: str, business_type: str = ""):
         all_tiktok_profile = _filter_tiktok_pool_for_profile(all_tiktok, business_type)
         all_federal = _load_docs("federal_register")
 
-        reddit_docs = _filter_by_neighborhood(all_reddit, name)
+        reddit_docs = rank_reddit_docs(
+            _filter_by_neighborhood(all_reddit, name),
+            business_type=business_type or "small business",
+            neighborhood=name,
+            min_score=0,
+        )
         reviews_docs = _filter_by_neighborhood(all_reviews, name)
         realestate_docs = _filter_by_neighborhood(all_realestate, name)
         tiktok_docs = _rank_tiktok_docs(all_tiktok_profile, business_type, name)
@@ -1103,16 +1126,49 @@ async def neighborhood(name: str, business_type: str = ""):
             if typed_reviews:
                 reviews_docs = typed_reviews
 
-        # Fallback: if no neighborhood-specific matches, use relevance-ranked global data
+        # Query-time fallback: if neighborhood-local reddit signals are weak, run bounded search.
+        if reddit_docs_are_weak(
+            reddit_docs,
+            business_type=business_type or "small business",
+            neighborhood=name,
+            min_count=3,
+            median_threshold=2.0,
+        ):
+            start_ms = int(time.time() * 1000)
+            fallback_docs = await search_reddit_fallback_runtime(
+                business_type=business_type or "small business",
+                neighborhood=name,
+                budget_ms=FALLBACK_BUDGET_MS,
+            )
+            latency_ms = int(time.time() * 1000) - start_ms
+            print(
+                "reddit_fallback_triggered",
+                {
+                    "neighborhood": name,
+                    "business_type": business_type or "small business",
+                    "fallback_latency_ms": latency_ms,
+                    "fallback_docs_found": len(fallback_docs),
+                    "adapter_used": (fallback_docs[0].get("metadata", {}) or {}).get("retrieval_method", "") if fallback_docs else "",
+                },
+            )
+            if fallback_docs:
+                await _spawn_reddit_fallback_persist(fallback_docs)
+                reddit_docs = merge_rank_reddit_docs(
+                    reddit_docs,
+                    fallback_docs,
+                    business_type=business_type or "small business",
+                    neighborhood=name,
+                    min_score=0,
+                )
+
+        # Final fallback: use relevance-ranked global local-cache docs if still empty.
         if not reddit_docs and all_reddit:
-            # Prefer posts mentioning the business type
-            if business_type:
-                kw_lower = BUSINESS_TYPE_KEYWORDS.get(business_type.lower(), [business_type.lower()])
-                scored = [(d, sum(1 for kw in kw_lower if kw in f"{d.get('title', '')} {d.get('content', '')[:300]}".lower())) for d in all_reddit]
-                scored.sort(key=lambda x: x[1], reverse=True)
-                reddit_docs = [d for d, _ in scored[:10]]
-            else:
-                reddit_docs = all_reddit[:10]
+            reddit_docs = rank_reddit_docs(
+                all_reddit,
+                business_type=business_type or "small business",
+                neighborhood=name,
+                min_score=0,
+            )[:10]
 
         if not reviews_docs and all_reviews:
             if business_type:
@@ -1426,13 +1482,13 @@ async def gpu_metrics():
 
     # Query non-batched GPU classes directly (batched classes can't have extra methods)
     gpu_classes = [
-        ("AlethiaLLM", "h100_llm"),
+        ("AleithiaLLM", "h100_llm"),
         ("TrafficAnalyzer", "t4_cctv"),
     ]
 
     async def _fetch(cls_name: str, key: str):
         try:
-            cls = modal.Cls.from_name("alethia", cls_name)
+            cls = modal.Cls.from_name("aleithia", cls_name)
             instance = cls()
             metrics = await asyncio.wait_for(
                 instance.gpu_metrics.remote.aio(), timeout=8,
@@ -1495,7 +1551,7 @@ async def demo_scale(request: Request):
     num_queries = body.get("num_queries", 5)
     run_classify = body.get("run_classify", True)
 
-    demo_fn = modal.Function.from_name("alethia", "scaling_demo")
+    demo_fn = modal.Function.from_name("aleithia", "scaling_demo")
     result = await demo_fn.remote.aio(
         num_agents=num_agents,
         num_queries=num_queries,
@@ -1620,7 +1676,7 @@ class _AnalyzeRequest(BaseModel):
 async def analyze(payload: _AnalyzeRequest):
     """Deep Dive: generate a Python analysis script via LLM, run it in a Modal Sandbox."""
     from modal_app.instrumentation import get_tracer
-    tracer = get_tracer("alethia.web")
+    tracer = get_tracer("aleithia.web")
 
     span_ctx = tracer.start_as_current_span("deep-dive-analyze") if tracer else None
     span = span_ctx.__enter__() if span_ctx else None
@@ -1639,7 +1695,7 @@ async def analyze(payload: _AnalyzeRequest):
             )
 
         # 2. Generate analysis code via LLM
-        llm_cls = modal.Cls.from_name("alethia", "AlethiaLLM")
+        llm_cls = modal.Cls.from_name("aleithia", "AleithiaLLM")
         llm = llm_cls()
 
         prompt = _build_codegen_prompt(
@@ -1719,7 +1775,7 @@ async def analyze(payload: _AnalyzeRequest):
 @app.function(
     image=web_image,
     volumes={"/data": volume},
-    secrets=[modal.Secret.from_name("alethia-secrets"), modal.Secret.from_name("arize-secrets")],
+    secrets=[modal.Secret.from_name("aleithia-secrets"), modal.Secret.from_name("arize-secrets")],
     min_containers=1,
 )
 @modal.asgi_app()
