@@ -26,7 +26,6 @@ export default function Drawer({ open, onClose, children, title, side = 'right',
   if (!open) return null
 
   const slideClass = side === 'right' ? 'right-0' : 'left-0'
-  const translateClass = side === 'right' ? 'translate-x-0' : 'translate-x-0'
 
   return (
     <div className="fixed inset-0 z-50" aria-modal="true" role="dialog">

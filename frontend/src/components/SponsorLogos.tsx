@@ -33,9 +33,8 @@ export function ArizeAILogo() {
 
 export function OpenAILogo() {
   return (
-    <svg className={cls} viewBox="0 0 320 80" xmlns="http://www.w3.org/2000/svg">
-      <path d="M40 10c-16.57 0-30 13.43-30 30s13.43 30 30 30 30-13.43 30-30-13.43-30-30-30Zm0 8a22 22 0 0 1 19.05 11l-8.3 4.8A11 11 0 0 0 40 28.5a11 11 0 0 0-10.75 5.3l-8.3-4.8A22 22 0 0 1 40 18Zm-22 22a22 22 0 0 1 3-11.05l8.3 4.8A11 11 0 0 0 29 40c0 2.3.7 4.4 1.93 6.15l-8.23 4.8A22 22 0 0 1 18 40Zm22 22a22 22 0 0 1-19.05-11l8.3-4.8A11 11 0 0 0 40 51.5a11 11 0 0 0 10.75-5.3l8.3 4.8A22 22 0 0 1 40 62Zm22-22a22 22 0 0 1-3 11.05l-8.3-4.8A11 11 0 0 0 51 40a11 11 0 0 0-1.93-6.15l8.23-4.8A22 22 0 0 1 62 40Z" />
-      <text x="82" y="52" fontFamily="system-ui, sans-serif" fontWeight="600" fontSize="28" fill="currentColor">OpenAI</text>
+    <svg className={cls} viewBox="0 0 140 32" xmlns="http://www.w3.org/2000/svg">
+      <text x="0" y="22" fontFamily="system-ui, sans-serif" fontWeight="600" fontSize="20" fill="currentColor">OpenAI</text>
     </svg>
   )
 }

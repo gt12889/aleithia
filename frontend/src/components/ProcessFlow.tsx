@@ -13,6 +13,10 @@ interface AgentSummary {
   error?: boolean
 }
 
+function hasError(a: AgentSummary | { name: string; data_points: number }): boolean | undefined {
+  return 'error' in a ? (a as AgentSummary).error : undefined
+}
+
 interface AgentInfo {
   agents_deployed: number
   neighborhoods: string[]
@@ -236,19 +240,19 @@ export default function ProcessFlow({ stage, question, agentInfo, elapsedMs, log
               <div className="ml-1 border-l border-white/[0.05] pl-2 space-y-px">
                 {agentList.map((agent, i) => (
                   <div key={i} className="flex items-center gap-1.5 py-px">
-                    <NodeDot active={si === 1} done={agentsDone} error={agent.error} />
+                    <NodeDot active={si === 1} done={agentsDone} error={hasError(agent)} />
                     <span className="text-[8px] font-mono uppercase tracking-wider text-white/20 w-10 shrink-0">
                       {formatAgentType(agent.name)}
                     </span>
                     <span className="text-[10px] font-mono text-white/30 truncate">
                       {formatAgentLabel(agent.name)}
                     </span>
-                    {agentsDone && !agent.error && agent.data_points > 0 && (
+                    {agentsDone && !hasError(agent) && agent.data_points > 0 && (
                       <span className="text-[9px] font-mono text-white/12 ml-auto shrink-0">
                         {agent.data_points} pts
                       </span>
                     )}
-                    {agent.error && (
+                    {hasError(agent) && (
                       <span className="text-[9px] font-mono text-red-400/40 ml-auto shrink-0">err</span>
                     )}
                   </div>

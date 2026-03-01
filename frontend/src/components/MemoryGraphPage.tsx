@@ -116,7 +116,7 @@ export default function MemoryGraphPage({ onBack }: Props) {
           console.log('[MemoryGraph] Empty docs. Full response:', JSON.stringify(d).slice(0, 500))
         }
         setDocuments(normalizeDocs(raw ?? []))
-        setHasMore(pagination ? pagination.totalPages > 1 : false)
+        setHasMore(pagination ? (pagination.totalPages ?? 0) > 1 : false)
         setPage(1)
         setIsLoading(false)
       })
@@ -167,7 +167,7 @@ export default function MemoryGraphPage({ onBack }: Props) {
         raw = []
       }
       setDocuments((prev) => [...prev, ...normalizeDocs(raw)])
-      setHasMore(pagination ? nextPage < pagination.totalPages : false)
+      setHasMore(pagination ? nextPage < (pagination.totalPages ?? 1) : false)
       setPage(nextPage)
     } catch (err) {
       console.error('Failed to load more documents:', err)
@@ -182,9 +182,9 @@ export default function MemoryGraphPage({ onBack }: Props) {
     const q = searchQuery.toLowerCase()
     return documents
       .filter((doc) => {
-        const title = ((doc as Record<string, unknown>).title as string) ?? ''
-        const content = ((doc as Record<string, unknown>).content as string) ?? ''
-        const source = ((doc as Record<string, unknown>).source as string) ?? ''
+        const title = (doc as unknown as Record<string, unknown>).title as string ?? ''
+        const content = (doc as unknown as Record<string, unknown>).content as string ?? ''
+        const source = (doc as unknown as Record<string, unknown>).source as string ?? ''
         return title.toLowerCase().includes(q) || content.toLowerCase().includes(q) || source.toLowerCase().includes(q)
       })
       .map((doc) => doc.id)
@@ -267,7 +267,7 @@ export default function MemoryGraphPage({ onBack }: Props) {
         {showCityGraph ? (
           <ForceGraph2D
             graphData={{
-              nodes: cityGraph.nodes.map((n) => ({ id: n.id, ...n })),
+              nodes: cityGraph.nodes.map((n) => ({ ...n, id: n.id })),
               links: cityGraph.edges.map((e) => ({ source: e.source, target: e.target })),
             }}
             width={typeof window !== 'undefined' ? window.innerWidth - 80 : 800}

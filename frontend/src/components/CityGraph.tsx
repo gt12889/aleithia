@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
-import { fetchCityGraph, fetchNeighborhoodGraph, type CityGraphData, type GraphNode } from '../api.ts'
+import ForceGraph2D from 'react-force-graph-2d'
+import { fetchCityGraph, type CityGraphData, type GraphNode } from '../api.ts'
 
 const NODE_COLORS: Record<string, string> = {
   neighborhood: '#3b82f6',
@@ -10,13 +11,14 @@ const NODE_COLORS: Record<string, string> = {
 
 interface Props {
   activeNeighborhood?: string
+  /** When true, uses ForceGraph2D for drag/zoom/pan. Default false for static SVG. */
+  interactive?: boolean
 }
 
-export default function CityGraph({ activeNeighborhood }: Props) {
+export default function CityGraph({ activeNeighborhood, interactive = false }: Props) {
   const [graphData, setGraphData] = useState<CityGraphData | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  const [viewMode, setViewMode] = useState<'neighborhood' | 'full'>('neighborhood')
   const [selectedNode, setSelectedNode] = useState<GraphNode | null>(null)
   const [filters, setFilters] = useState<Record<string, boolean>>({
     neighborhood: true,
@@ -25,27 +27,41 @@ export default function CityGraph({ activeNeighborhood }: Props) {
     business_type: true,
   })
   const svgRef = useRef<SVGSVGElement>(null)
+  const containerRef = useRef<HTMLDivElement>(null)
+  const fgRef = useRef<{ zoom: (k: number, durationMs?: number) => void; zoomToFit: (durationMs?: number, padding?: number) => void } | undefined>(undefined)
+  const [dimensions, setDimensions] = useState({ width: 800, height: 500 })
+
+  useEffect(() => {
+    if (!interactive || !containerRef.current) return
+    const el = containerRef.current
+    const update = () => {
+      const rect = el.getBoundingClientRect()
+      if (rect.width > 0 && rect.height > 0) setDimensions({ width: rect.width, height: rect.height })
+    }
+    update()
+    const ro = new ResizeObserver(update)
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [interactive])
 
   const loadGraph = useCallback(async () => {
     setLoading(true)
     setError(null)
     try {
-      const data = viewMode === 'neighborhood' && activeNeighborhood
-        ? await fetchNeighborhoodGraph(activeNeighborhood)
-        : await fetchCityGraph()
+      const data = await fetchCityGraph()
       setGraphData(data)
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to load graph')
     } finally {
       setLoading(false)
     }
-  }, [viewMode, activeNeighborhood])
+  }, [])
 
   useEffect(() => { loadGraph() }, [loadGraph])
 
-  // Run force simulation and render to SVG
+  // Run force simulation and render to SVG (only when not interactive)
   useEffect(() => {
-    if (!graphData || !svgRef.current) return
+    if (interactive || !graphData || !svgRef.current) return
 
     const svg = svgRef.current
     const width = svg.clientWidth || 800
@@ -174,29 +190,28 @@ export default function CityGraph({ activeNeighborhood }: Props) {
 
       svg.appendChild(g)
     }
-  }, [graphData, filters, activeNeighborhood])
+  }, [interactive, graphData, filters, activeNeighborhood])
+
+  // Filtered graph for ForceGraph2D
+  const interactiveGraphData = graphData
+    ? (() => {
+        const filteredNodes = graphData.nodes.filter(n => filters[n.type])
+        const filteredNodeIds = new Set(filteredNodes.map(n => n.id))
+        const filteredEdges = graphData.edges.filter(e =>
+          filteredNodeIds.has(e.source) && filteredNodeIds.has(e.target)
+        )
+        return {
+          nodes: filteredNodes.map(n => ({ ...n, id: n.id })),
+          links: filteredEdges.map(e => ({ source: e.source, target: e.target })),
+        }
+      })()
+    : null
 
   return (
     <div className="border border-white/[0.06] bg-white/[0.01]">
       <div className="px-4 py-3 border-b border-white/[0.06] flex items-center justify-between">
         <h3 className="text-[10px] font-mono uppercase tracking-wider text-white/40">Knowledge Graph</h3>
         <div className="flex items-center gap-3">
-          <div className="flex gap-0 border border-white/[0.08] rounded overflow-hidden">
-            {(['neighborhood', 'full'] as const).map(mode => (
-              <button
-                key={mode}
-                type="button"
-                onClick={() => setViewMode(mode)}
-                className={`px-3 py-1 text-[10px] font-mono uppercase tracking-wider transition-colors cursor-pointer ${
-                  viewMode === mode
-                    ? 'bg-white/[0.06] text-white'
-                    : 'text-white/30 hover:text-white/50'
-                }`}
-              >
-                {mode === 'neighborhood' ? '1-Hop' : 'Full'}
-              </button>
-            ))}
-          </div>
           {graphData?.stats && (
             <span className="text-[10px] font-mono text-white/20">
               {graphData.stats.total_nodes} nodes &middot; {graphData.stats.total_edges} edges
@@ -227,23 +242,44 @@ export default function CityGraph({ activeNeighborhood }: Props) {
       </div>
 
       {/* Graph canvas */}
-      <div className="relative" style={{ height: 500 }}>
+      <div ref={containerRef} className="relative" style={{ height: 500 }}>
         {loading && (
-          <div className="absolute inset-0 flex items-center justify-center">
+          <div className="absolute inset-0 flex items-center justify-center z-10">
             <div className="w-5 h-5 border border-white/20 border-t-white/60 rounded-full animate-spin" />
           </div>
         )}
         {error && (
-          <div className="absolute inset-0 flex items-center justify-center text-xs text-red-400/60 font-mono">
+          <div className="absolute inset-0 flex items-center justify-center text-xs text-red-400/60 font-mono z-10">
             {error}
           </div>
         )}
         {!loading && graphData && graphData.nodes.length === 0 && (
-          <div className="absolute inset-0 flex items-center justify-center text-xs text-white/20 font-mono">
+          <div className="absolute inset-0 flex items-center justify-center text-xs text-white/20 font-mono z-10">
             No graph data &mdash; run <code className="text-white/30">modal run -m modal_app.graph::build_city_graph</code>
           </div>
         )}
-        <svg ref={svgRef} width="100%" height="100%" className="bg-transparent" />
+        {interactive && interactiveGraphData && interactiveGraphData.nodes.length > 0 ? (
+          <ForceGraph2D
+            ref={fgRef}
+            graphData={interactiveGraphData}
+            width={dimensions.width}
+            height={dimensions.height}
+            nodeLabel={(n) => (n as GraphNode).label ?? (n as { id?: string }).id ?? ''}
+            nodeColor={(n) => NODE_COLORS[(n as GraphNode).type] || '#94a3b8'}
+            nodeVal={(n) => Math.max(4, ((n as GraphNode).size ?? 10) / 4)}
+            linkColor={() => 'rgba(255,255,255,0.2)'}
+            backgroundColor="#06080d"
+            onNodeClick={(n) => setSelectedNode(n as GraphNode)}
+            onEngineStop={() => {
+              if (fgRef.current) {
+                fgRef.current.zoomToFit(200, 5)
+                fgRef.current.zoom(1.8, 0)
+              }
+            }}
+          />
+        ) : (
+          <svg ref={svgRef} width="100%" height="100%" className="bg-transparent" />
+        )}
       </div>
 
       {/* Selected node panel */}

@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { motion } from 'framer-motion'
 import type { UserProfile } from '../types/index.ts'
+import Squares from './Squares.tsx'
 
 const NEIGHBORHOODS = [
   'Albany Park', 'Andersonville', 'Avondale', 'Boystown', 'Bridgeport',
@@ -47,6 +48,17 @@ export default function OnboardingForm({ onSubmit, onCancel, initialProfile, emb
 
   return (
     <div className={`relative flex flex-col overflow-hidden bg-[#06080d] ${embedded ? '' : 'min-h-screen'}`}>
+      {/* Animated grid background (hover highlights in empty areas) */}
+      <div className="absolute inset-0 overflow-hidden" style={{ zIndex: 0 }} aria-hidden>
+        <Squares
+          speed={0.5}
+          squareSize={40}
+          direction="diagonal"
+          borderColor="#271E37"
+          hoverFillColor="#222222"
+          className="opacity-60"
+        />
+      </div>
       {/* Subtle animated background */}
       <motion.div
         className="absolute inset-0 pointer-events-none"

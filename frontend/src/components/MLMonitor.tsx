@@ -76,14 +76,6 @@ function GpuBar({ label, value, max, unit, color }: { label: string; value: numb
   )
 }
 
-function _formatAgo(seconds?: number): string {
-  if (seconds == null) return ''
-  if (seconds < 60) return `${seconds}s ago`
-  if (seconds < 3600) return `${Math.round(seconds / 60)}m ago`
-  if (seconds < 86400) return `${Math.round(seconds / 3600)}h ago`
-  return `${Math.round(seconds / 86400)}d ago`
-}
-
 function GpuCard({ gpuKey, entry, taskName, warm }: { gpuKey: string; entry: GpuMetricsEntry; taskName: string; warm?: boolean }) {
   const gpuLabel = gpuKey.startsWith('h100') ? 'H100' : 'T4'
   const isActive = entry.status === 'active'

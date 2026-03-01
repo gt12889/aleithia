@@ -62,3 +62,26 @@
   to { opacity: 1; transform: translateY(0); }
 }
 
+/* CCTV HUD scanline */
+@keyframes cctv-scanline {
+  0% { transform: translateY(-100%); }
+  100% { transform: translateY(100%); }
+}
+
+.cctv-scanline::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: linear-gradient(
+    to bottom,
+    transparent,
+    rgba(255, 255, 255, 0.08),
+    transparent
+  );
+  box-shadow: 0 0 8px rgba(255, 255, 255, 0.05);
+  animation: cctv-scanline 2.5s linear infinite;
+  pointer-events: none;
+}
+
