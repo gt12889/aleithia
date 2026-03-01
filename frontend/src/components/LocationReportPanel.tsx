@@ -1,3 +1,4 @@
+import { useState, useEffect } from 'react'
 import { jsPDF } from 'jspdf'
 import type { NeighborhoodData, RiskScore, UserProfile } from '../types/index.ts'
 import { computeInsights } from '../insights.ts'

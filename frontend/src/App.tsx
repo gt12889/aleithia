@@ -96,7 +96,7 @@ function App() {
             <Drawer
               open={sessionDrawerOpen}
               onClose={() => setSessionDrawerOpen(false)}
-              title="Get started"
+              title="Initialize Session"
               width="max-w-md"
             >
               <OnboardingForm

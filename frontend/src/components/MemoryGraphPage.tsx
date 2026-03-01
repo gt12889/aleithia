@@ -316,7 +316,7 @@ export default function MemoryGraphPage({ onBack }: Props) {
                 onClick={() => navigate('/start')}
                 className="pointer-events-auto px-6 py-2.5 text-sm font-medium !bg-white !text-[#06080d] hover:!bg-white/90 transition-colors cursor-pointer"
               >
-                Get started
+                Initialize Session
               </button>
             </div>
           )}
