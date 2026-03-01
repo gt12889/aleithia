@@ -21,6 +21,13 @@ from pydantic import BaseModel, Field
 
 from modal_app.volume import app, volume, web_image, sandbox_image, VOLUME_MOUNT, RAW_DATA_PATH, PROCESSED_DATA_PATH
 from modal_app.common import CHICAGO_NEIGHBORHOODS, COMMUNITY_AREA_MAP, NON_SENSOR_PIPELINE_SOURCES, detect_neighborhood, neighborhood_to_ca
+from modal_app.pipelines.reddit import (
+    FALLBACK_BUDGET_MS,
+    merge_rank_reddit_docs,
+    rank_reddit_docs,
+    reddit_docs_are_weak,
+    search_reddit_fallback_runtime,
+)
 
 web_app = FastAPI(title="Alethia API", version="2.0")
 
@@ -56,6 +63,17 @@ def _load_docs(source: str, limit: int = 200) -> list[dict]:
             print(f"_load_docs [{source}]: corrupted JSON {json_file.name}: {e}")
             continue
     return docs
+
+
+async def _spawn_reddit_fallback_persist(docs: list[dict]) -> None:
+    """Fire-and-forget persistence for query-time fallback Reddit hits."""
+    if not docs:
+        return
+    try:
+        persist_fn = modal.Function.from_name("alethia", "persist_reddit_fallback_batch")
+        await persist_fn.spawn.aio(docs=docs)
+    except Exception as exc:
+        print(f"Reddit fallback persist spawn failed: {exc}")
 
 
 _COUNT_ONLY_RE = re.compile(r"^\s*\d[\d,.\s]*[KMBkmb]?\s*$")
@@ -1081,7 +1099,12 @@ async def neighborhood(name: str, business_type: str = ""):
         all_tiktok_profile = _filter_tiktok_pool_for_profile(all_tiktok, business_type)
         all_federal = _load_docs("federal_register")
 
-        reddit_docs = _filter_by_neighborhood(all_reddit, name)
+        reddit_docs = rank_reddit_docs(
+            _filter_by_neighborhood(all_reddit, name),
+            business_type=business_type or "small business",
+            neighborhood=name,
+            min_score=0,
+        )
         reviews_docs = _filter_by_neighborhood(all_reviews, name)
         realestate_docs = _filter_by_neighborhood(all_realestate, name)
         tiktok_docs = _rank_tiktok_docs(all_tiktok_profile, business_type, name)
@@ -1103,16 +1126,49 @@ async def neighborhood(name: str, business_type: str = ""):
             if typed_reviews:
                 reviews_docs = typed_reviews
 
-        # Fallback: if no neighborhood-specific matches, use relevance-ranked global data
+        # Query-time fallback: if neighborhood-local reddit signals are weak, run bounded search.
+        if reddit_docs_are_weak(
+            reddit_docs,
+            business_type=business_type or "small business",
+            neighborhood=name,
+            min_count=3,
+            median_threshold=2.0,
+        ):
+            start_ms = int(time.time() * 1000)
+            fallback_docs = await search_reddit_fallback_runtime(
+                business_type=business_type or "small business",
+                neighborhood=name,
+                budget_ms=FALLBACK_BUDGET_MS,
+            )
+            latency_ms = int(time.time() * 1000) - start_ms
+            print(
+                "reddit_fallback_triggered",
+                {
+                    "neighborhood": name,
+                    "business_type": business_type or "small business",
+                    "fallback_latency_ms": latency_ms,
+                    "fallback_docs_found": len(fallback_docs),
+                    "adapter_used": (fallback_docs[0].get("metadata", {}) or {}).get("retrieval_method", "") if fallback_docs else "",
+                },
+            )
+            if fallback_docs:
+                await _spawn_reddit_fallback_persist(fallback_docs)
+                reddit_docs = merge_rank_reddit_docs(
+                    reddit_docs,
+                    fallback_docs,
+                    business_type=business_type or "small business",
+                    neighborhood=name,
+                    min_score=0,
+                )
+
+        # Final fallback: use relevance-ranked global local-cache docs if still empty.
         if not reddit_docs and all_reddit:
-            # Prefer posts mentioning the business type
-            if business_type:
-                kw_lower = BUSINESS_TYPE_KEYWORDS.get(business_type.lower(), [business_type.lower()])
-                scored = [(d, sum(1 for kw in kw_lower if kw in f"{d.get('title', '')} {d.get('content', '')[:300]}".lower())) for d in all_reddit]
-                scored.sort(key=lambda x: x[1], reverse=True)
-                reddit_docs = [d for d, _ in scored[:10]]
-            else:
-                reddit_docs = all_reddit[:10]
+            reddit_docs = rank_reddit_docs(
+                all_reddit,
+                business_type=business_type or "small business",
+                neighborhood=name,
+                min_score=0,
+            )[:10]
 
         if not reviews_docs and all_reviews:
             if business_type:
