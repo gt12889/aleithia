@@ -18,6 +18,8 @@ import DemographicsCard from './DemographicsCard.tsx'
 import PipelineMonitor from './PipelineMonitor.tsx'
 import MLMonitor from './MLMonitor.tsx'
 import CCTVFeedCard from './CCTVFeedCard.tsx'
+import CCTVCameraCard from './CCTVCameraCard.tsx'
+import CCTVCameraDrawer from './CCTVCameraDrawer.tsx'
 import InsightsCard from './InsightsCard.tsx'
 import CityGraph from './CityGraph.tsx'
 import LocationReportPanel from './LocationReportPanel.tsx'
@@ -25,6 +27,8 @@ import FootTrafficChart from './FootTrafficChart.tsx'
 import StreetscapeCard from './StreetscapeCard.tsx'
 import Drawer from './Drawer.tsx'
 import ProfilePage from './ProfilePage.tsx'
+import ShinyText from './ShinyText.tsx'
+import { InspectionOutcomesChart, TopViolationsPareto, AlertHoursStackedArea } from './VaultCharts.tsx'
 
 /*
   Legacy chat imports intentionally commented out (not deleted):
@@ -45,6 +49,7 @@ interface ReportAgentInfo {
     name: string
     data_points: number
     sources?: string[]
+    error?: boolean
   }>
 }
 
@@ -490,9 +495,9 @@ export default function Dashboard({ profile, onReset, token, onProfileUpdate, in
           <button
             type="button"
             onClick={onReset}
-            className="text-sm font-semibold text-white uppercase tracking-wide hover:text-white/80 transition-colors cursor-pointer"
+            className="text-sm font-semibold uppercase tracking-wide hover:opacity-80 transition-opacity cursor-pointer"
           >
-            Aleithia
+            <ShinyText text="Aleithia" speed={2} color="#b5b5b5" shineColor="#ffffff" spread={120} direction="left" />
           </button>
           <div className="h-3.5 w-px bg-white/10" />
           <span className="text-xs font-mono text-white/30">
@@ -528,7 +533,7 @@ export default function Dashboard({ profile, onReset, token, onProfileUpdate, in
             </button>
           </SignedIn>
 
-          <button onClick={onReset} className="text-[10px] font-mono uppercase tracking-wider text-white/20 hover:text-white/50 transition-colors cursor-pointer">
+          <button onClick={() => navigate('/start')} className="text-[10px] font-mono uppercase tracking-wider text-white/20 hover:text-white/50 transition-colors cursor-pointer">
             New Search
           </button>
         </div>
@@ -716,7 +721,7 @@ export default function Dashboard({ profile, onReset, token, onProfileUpdate, in
 
               {activeTab === 'models' && (
                 <div className="space-y-4">
-                  <CityGraph activeNeighborhood={profile.neighborhood} />
+                  <CityGraph activeNeighborhood={profile.neighborhood} interactive />
                   <MLMonitor />
                 </div>
               )}
@@ -725,7 +730,6 @@ export default function Dashboard({ profile, onReset, token, onProfileUpdate, in
                 <VaultTab
                   onOpenGraph={() => navigate('/memory-graph')}
                   dataPoints={reportAgentInfo?.data_points ?? 0}
-                  neighborhoodData={neighborhoodData}
                   neighborhood={profile.neighborhood}
                 />
               )}
@@ -1012,146 +1016,37 @@ function VisionTab({ cctv, traffic, parking, neighborhood }: { cctv: CCTVData | 
       {/* Highway Traffic 24h Chart */}
       <FootTrafficChart neighborhood={neighborhood} />
 
-      {/* Section C: Camera Grid — all cameras */}
+      {/* Section C: CCTV — Camera Grid (mini HUD cards, Drawer on click) */}
       {cameras.length > 0 ? (
         <div className="border border-white/[0.06] bg-white/[0.02]">
           <div className="flex items-center justify-between px-4 py-3 border-b border-white/[0.06]">
             <div className="flex items-center gap-2">
               <div className="w-1.5 h-1.5 rounded-full bg-green-400 animate-pulse" />
               <span className="text-[10px] font-mono uppercase tracking-wider text-white/40">
-                Live Camera Feeds
+                CCTV — Live Camera Feeds
               </span>
             </div>
             <span className="text-[10px] font-mono text-white/20">
-              {cameras.length} camera{cameras.length !== 1 ? 's' : ''} — click to expand
+              {cameras.length} camera{cameras.length !== 1 ? 's' : ''} — click to open
             </span>
           </div>
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-px bg-white/[0.04]">
-            {cameras.map(cam => (
-              <button
+            {cameras.map((cam) => (
+              <CCTVCameraCard
                 key={cam.camera_id}
-                type="button"
+                cam={cam}
+                cctvDensity={cctv?.density ?? 'n/a'}
                 onClick={() => setExpandedCam(expandedCam === cam.camera_id ? null : cam.camera_id)}
-                className={`relative bg-[#06080d] p-0 cursor-pointer transition-all ${
-                  expandedCam === cam.camera_id ? 'ring-1 ring-white/30' : 'hover:ring-1 hover:ring-white/10'
-                }`}
-              >
-                <div className="relative aspect-video bg-black/40 overflow-hidden">
-                  <img
-                    src={api.cctvFrameUrl(cam.camera_id)}
-                    alt={`Camera ${cam.camera_id}`}
-                    className="w-full h-full object-cover"
-                    loading="lazy"
-                    onError={e => {
-                      const target = e.currentTarget
-                      target.style.display = 'none'
-                      const parent = target.parentElement
-                      if (parent && !parent.querySelector('.fallback')) {
-                        const fb = document.createElement('div')
-                        fb.className = 'fallback absolute inset-0 flex items-center justify-center'
-                        fb.innerHTML = '<span class="text-[10px] font-mono text-white/15">NO SIGNAL</span>'
-                        parent.appendChild(fb)
-                      }
-                    }}
-                  />
-                  <div className="absolute top-1.5 right-1.5 flex gap-1">
-                    <span className="px-1.5 py-0.5 text-[9px] font-mono font-bold bg-green-500/80 text-white rounded-sm">
-                      P:{cam.pedestrians}
-                    </span>
-                    <span className="px-1.5 py-0.5 text-[9px] font-mono font-bold bg-blue-500/80 text-white rounded-sm">
-                      V:{cam.vehicles}
-                    </span>
-                    {cam.bicycles > 0 && (
-                      <span className="px-1.5 py-0.5 text-[9px] font-mono font-bold bg-amber-500/80 text-white rounded-sm">
-                        B:{cam.bicycles}
-                      </span>
-                    )}
-                  </div>
-                </div>
-                <div className="px-2 py-1.5 text-left">
-                  <div className="text-[10px] font-mono text-white/50 truncate">{cam.camera_id}</div>
-                  <div className="flex items-center justify-between mt-0.5">
-                    <span className="text-[9px] font-mono text-white/20">{cam.distance_km?.toFixed(1) ?? '—'}km</span>
-                    <span className={`text-[9px] font-mono ${
-                      cam.density_level === 'high' ? 'text-green-400/60' :
-                      cam.density_level === 'medium' ? 'text-yellow-400/60' :
-                      'text-white/20'
-                    }`}>
-                      {cam.density_level}
-                    </span>
-                  </div>
-                </div>
-              </button>
+                isSelected={expandedCam === cam.camera_id}
+              />
             ))}
           </div>
-
-          {/* Expanded camera detail */}
-          {selectedCamera && (
-            <div className="border-t border-white/[0.06] p-4">
-              <div className="flex gap-4">
-                <div className="flex-1 aspect-video bg-black/40 overflow-hidden relative">
-                  <img
-                    src={api.cctvFrameUrl(selectedCamera.camera_id)}
-                    alt={`Camera ${selectedCamera.camera_id} — expanded`}
-                    className="w-full h-full object-contain"
-                  />
-                  <div className="absolute top-2 right-2 flex gap-1.5">
-                    <span className="px-2 py-1 text-[10px] font-mono font-bold bg-green-500/80 text-white rounded-sm">
-                      P:{selectedCamera.pedestrians}
-                    </span>
-                    <span className="px-2 py-1 text-[10px] font-mono font-bold bg-blue-500/80 text-white rounded-sm">
-                      V:{selectedCamera.vehicles}
-                    </span>
-                    {selectedCamera.bicycles > 0 && (
-                      <span className="px-2 py-1 text-[10px] font-mono font-bold bg-amber-500/80 text-white rounded-sm">
-                        B:{selectedCamera.bicycles}
-                      </span>
-                    )}
-                  </div>
-                </div>
-                <div className="w-48 space-y-3">
-                  <div>
-                    <div className="text-[9px] font-mono uppercase tracking-wider text-white/20 mb-1">Camera</div>
-                    <div className="text-xs font-mono text-white/60">{selectedCamera.camera_id}</div>
-                  </div>
-                  <div>
-                    <div className="text-[9px] font-mono uppercase tracking-wider text-white/20 mb-1">Distance</div>
-                    <div className="text-xs font-mono text-white/60">{selectedCamera.distance_km?.toFixed(1) ?? '—'} km</div>
-                  </div>
-                  <div>
-                    <div className="text-[9px] font-mono uppercase tracking-wider text-white/20 mb-1">Density</div>
-                    <div className={`text-xs font-mono ${
-                      selectedCamera.density_level === 'high' ? 'text-green-400' :
-                      selectedCamera.density_level === 'medium' ? 'text-yellow-400' :
-                      'text-white/40'
-                    }`}>
-                      {selectedCamera.density_level}
-                    </div>
-                  </div>
-                  <div>
-                    <div className="text-[9px] font-mono uppercase tracking-wider text-white/20 mb-1">Detections</div>
-                    <div className="text-xs font-mono text-white/50">
-                      {selectedCamera.pedestrians} ped / {selectedCamera.vehicles} veh / {selectedCamera.bicycles} bike
-                    </div>
-                  </div>
-                  <div>
-                    <div className="text-[9px] font-mono uppercase tracking-wider text-white/20 mb-1">Timestamp</div>
-                    <div className="text-[10px] font-mono text-white/40">
-                      {selectedCamera.timestamp ? new Date(selectedCamera.timestamp).toLocaleString() : '—'}
-                    </div>
-                  </div>
-                  <div>
-                    <div className="text-[9px] font-mono uppercase tracking-wider text-white/20 mb-1">Coordinates</div>
-                    <div className="text-[10px] font-mono text-white/30">
-                      {selectedCamera.lat != null && selectedCamera.lng != null
-                        ? `${selectedCamera.lat.toFixed(4)}, ${selectedCamera.lng.toFixed(4)}`
-                        : '—'}
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </div>
-          )}
+          <CCTVCameraDrawer
+            open={!!selectedCamera}
+            onClose={() => setExpandedCam(null)}
+            camera={selectedCamera ?? null}
+            cctv={cctv}
+          />
         </div>
       ) : (
         <div className="border border-white/[0.06] bg-white/[0.02] p-8 text-center">
@@ -1214,47 +1109,39 @@ function VisionTab({ cctv, traffic, parking, neighborhood }: { cctv: CCTVData | 
 function VaultTab({
   onOpenGraph,
   dataPoints = 0,
-  neighborhoodData,
   neighborhood,
+  neighborhoodData,
 }: {
   onOpenGraph: () => void
   dataPoints?: number
-  neighborhoodData?: NeighborhoodData | null
   neighborhood?: string
+  neighborhoodData?: NeighborhoodData | null
 }) {
   // Rough estimate: 2 min per doc manually vs seconds with AI
   const hoursReclaimed = dataPoints ? Math.round((dataPoints * 2) / 60 * 10) / 10 : 0
 
-  // Data volume by source for charts
-  // Theme-aligned bar colors: blue accent (#2B95D6) and white, alternating
-  const barColors = ['bg-[#2B95D6]/55', 'bg-white/45', 'bg-[#2B95D6]/45', 'bg-white/40', 'bg-[#2B95D6]/50', 'bg-white/35', 'bg-[#2B95D6]/40', 'bg-white/30']
-  const sourceData = neighborhoodData
-    ? [
-        { label: 'Inspections', value: neighborhoodData.inspection_stats?.total ?? 0 },
-        { label: 'Permits', value: neighborhoodData.permit_count ?? 0 },
-        { label: 'Licenses', value: neighborhoodData.license_count ?? 0 },
-        { label: 'Intel', value: (neighborhoodData.news?.length ?? 0) + (neighborhoodData.politics?.length ?? 0) },
-        { label: 'Community', value: (neighborhoodData.reddit?.length ?? 0) + (neighborhoodData.tiktok?.length ?? 0) },
-        { label: 'Market', value: (neighborhoodData.reviews?.length ?? 0) + (neighborhoodData.realestate?.length ?? 0) },
-        { label: 'Vision', value: neighborhoodData.cctv?.cameras?.length ?? 0 },
-        { label: 'Traffic', value: neighborhoodData.traffic?.length ?? 0 },
-      ]
-      .filter((d) => d.value > 0)
-      .map((d, i) => ({ ...d, color: barColors[i % barColors.length] }))
-    : []
-  const maxSource = Math.max(...sourceData.map((d) => d.value), 1)
-
   return (
     <div className="space-y-6">
+      {/* 1. Analytics Charts */}
+      {neighborhoodData && (
+        <div className="space-y-4">
+          <InspectionOutcomesChart inspections={neighborhoodData.inspections ?? []} />
+          <TopViolationsPareto inspections={neighborhoodData.inspections ?? []} />
+          <AlertHoursStackedArea data={neighborhoodData} />
+        </div>
+      )}
+
       {/* 2. Neural Graph Visualization */}
       <div className="border border-white/[0.06] bg-white/[0.02] p-5">
-        <h3 className="text-sm font-semibold text-white mb-3">The &quot;Neural&quot; Graph Visualization</h3>
+        <h3 className="text-sm font-semibold mb-3">
+          <ShinyText text='The "Neural" Graph Visualization' speed={2} color="#b5b5b5" shineColor="#ffffff" spread={120} direction="left" />
+        </h3>
         <p className="text-xs text-white/60 leading-relaxed mb-3">
           The standout feature is the Knowledge Graph, which visually proves that content is connected.
         </p>
         {neighborhood && (
           <div className="mb-4 border border-white/[0.06] rounded overflow-hidden">
-            <CityGraph activeNeighborhood={neighborhood} />
+            <CityGraph activeNeighborhood={neighborhood} interactive />
           </div>
         )}
         <ul className="text-xs text-white/50 space-y-2 list-disc list-inside mb-3">
@@ -1270,52 +1157,11 @@ function VaultTab({
         </button>
       </div>
 
-      {/* 3. List vs. Node — Data by Source Chart */}
-      <div className="border border-white/[0.06] bg-white/[0.02] p-5">
-        <h3 className="text-sm font-semibold text-white mb-3">3. List vs. Node Representation</h3>
-        <p className="text-xs text-white/60 leading-relaxed mb-4">
-          Data volume by source for this analysis — List view (tabs) vs. Node view (graph).
-        </p>
-        {sourceData.length > 0 ? (
-          <div className="space-y-2 mb-4">
-            <div className="text-[10px] font-mono uppercase tracking-wider text-white/40 mb-2">Data Volume by Source</div>
-            {sourceData.map((d) => (
-              <div key={d.label} className="flex items-center gap-3">
-                <span className="text-xs font-mono text-white/60 w-20 shrink-0">{d.label}</span>
-                <div className="flex-1 h-5 bg-white/[0.04] rounded overflow-hidden">
-                  <div
-                    className={`h-full rounded ${d.color} transition-all`}
-                    style={{ width: `${(d.value / maxSource) * 100}%` }}
-                  />
-                </div>
-                <span className="text-[10px] font-mono text-white/40 w-8 text-right">{d.value}</span>
-              </div>
-            ))}
-          </div>
-        ) : (
-          <p className="text-xs text-white/30 mb-4">No data loaded yet.</p>
-        )}
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-          <div className="border border-white/[0.06] p-4">
-            <div className="text-[10px] font-mono uppercase tracking-wider text-white/40 mb-2">List View</div>
-            <p className="text-xs text-white/50">Use Inspections, Permits, Intel, Community, Market tabs for quick scanning.</p>
-          </div>
-          <div className="border border-white/[0.06] p-4">
-            <div className="text-[10px] font-mono uppercase tracking-wider text-white/40 mb-2">Node View</div>
-            <p className="text-xs text-white/50">See how neighborhoods and regulations cluster together.</p>
-            <button
-              onClick={onOpenGraph}
-              className="mt-2 px-3 py-1.5 text-[10px] font-medium border border-white/20 text-white/60 hover:text-white/80 transition-colors cursor-pointer"
-            >
-              View Graph
-            </button>
-          </div>
-        </div>
-      </div>
-
       {/* Visualizing the &quot;Attention Crisis&quot; */}
       <div className="border border-white/[0.06] bg-white/[0.02] p-5">
-        <h3 className="text-sm font-semibold text-white mb-3">Visualizing the &quot;Attention Crisis&quot;</h3>
+        <h3 className="text-sm font-semibold mb-3">
+          <ShinyText text='Visualizing the "Attention Crisis"' speed={2} color="#b5b5b5" shineColor="#ffffff" spread={120} direction="left" />
+        </h3>
         <div className="space-y-4">
           <div className="flex items-center gap-4 p-4 border border-white/[0.06]">
             <div className="text-2xl font-bold font-mono text-white">{hoursReclaimed > 0 ? `${hoursReclaimed}h` : '—'}</div>
@@ -1326,26 +1172,6 @@ function VaultTab({
               </p>
             </div>
           </div>
-          {sourceData.length > 0 && (
-            <div className="p-4 border border-white/[0.06]">
-              <div className="text-[10px] font-mono uppercase tracking-wider text-white/40 mb-2">Impact: Data Volume by Source</div>
-              <div className="flex items-end gap-1 h-20">
-                {sourceData.map((d) => (
-                  <div
-                    key={d.label}
-                    className="flex-1 flex flex-col items-center justify-end group relative"
-                    title={`${d.label}: ${d.value}`}
-                  >
-                    <div
-                      className={`w-full min-w-[4px] rounded-t ${d.color} transition-all hover:opacity-90`}
-                      style={{ height: `${(d.value / maxSource) * 100}%` }}
-                    />
-                    <span className="text-[8px] font-mono text-white/30 mt-1 truncate max-w-full" title={d.label}>{d.label}</span>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
         </div>
       </div>
     </div>

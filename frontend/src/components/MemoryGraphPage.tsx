@@ -5,6 +5,9 @@ import { MemoryGraph, injectStyles } from '@supermemory/memory-graph'
 import '@supermemory/memory-graph/styles.css'
 import type { DocumentWithMemories } from '@supermemory/memory-graph'
 
+// Documents must satisfy index signature for internal graph usage
+type DocumentForGraph = DocumentWithMemories & Record<string, unknown>
+
 injectStyles()
 import { api } from '../api.ts'
 
@@ -19,7 +22,7 @@ interface Props {
   onBack: () => void
 }
 
-function normalizeDocs(raw: Record<string, unknown>[]): DocumentWithMemories[] {
+function normalizeDocs(raw: Record<string, unknown>[]): DocumentForGraph[] {
   return raw.map((doc) => {
     const entries = (doc.memoryEntries ?? doc.memories ?? []) as Record<string, unknown>[]
     const docId = String(doc.id ?? doc.customId ?? `doc-${Math.random().toString(36).slice(2)}`)
@@ -56,7 +59,7 @@ function normalizeDocs(raw: Record<string, unknown>[]): DocumentWithMemories[] {
       status: (doc.status ?? 'done') as DocumentWithMemories['status'],
       createdAt,
       updatedAt,
-    } as DocumentWithMemories
+    } as DocumentForGraph
   })
 }
 
@@ -64,7 +67,7 @@ export default function MemoryGraphPage({ onBack }: Props) {
   const navigate = useNavigate()
   const containerRef = useRef<HTMLDivElement>(null)
   const [cityGraph, setCityGraph] = useState<CityGraphData | null>(null)
-  const [documents, setDocuments] = useState<DocumentWithMemories[]>([])
+  const [documents, setDocuments] = useState<DocumentForGraph[]>([])
   const [isLoading, setIsLoading] = useState(true)
   const [isLoadingMore, setIsLoadingMore] = useState(false)
   const [error, setError] = useState<Error | null>(null)
@@ -116,7 +119,7 @@ export default function MemoryGraphPage({ onBack }: Props) {
           console.log('[MemoryGraph] Empty docs. Full response:', JSON.stringify(d).slice(0, 500))
         }
         setDocuments(normalizeDocs(raw ?? []))
-        setHasMore(pagination ? pagination.totalPages > 1 : false)
+        setHasMore(pagination ? (pagination.totalPages ?? 0) > 1 : false)
         setPage(1)
         setIsLoading(false)
       })
@@ -167,7 +170,7 @@ export default function MemoryGraphPage({ onBack }: Props) {
         raw = []
       }
       setDocuments((prev) => [...prev, ...normalizeDocs(raw)])
-      setHasMore(pagination ? nextPage < pagination.totalPages : false)
+      setHasMore(pagination ? nextPage < (pagination.totalPages ?? 1) : false)
       setPage(nextPage)
     } catch (err) {
       console.error('Failed to load more documents:', err)
@@ -182,9 +185,9 @@ export default function MemoryGraphPage({ onBack }: Props) {
     const q = searchQuery.toLowerCase()
     return documents
       .filter((doc) => {
-        const title = ((doc as Record<string, unknown>).title as string) ?? ''
-        const content = ((doc as Record<string, unknown>).content as string) ?? ''
-        const source = ((doc as Record<string, unknown>).source as string) ?? ''
+        const title = (doc as unknown as Record<string, unknown>).title as string ?? ''
+        const content = (doc as unknown as Record<string, unknown>).content as string ?? ''
+        const source = (doc as unknown as Record<string, unknown>).source as string ?? ''
         return title.toLowerCase().includes(q) || content.toLowerCase().includes(q) || source.toLowerCase().includes(q)
       })
       .map((doc) => doc.id)
@@ -267,7 +270,7 @@ export default function MemoryGraphPage({ onBack }: Props) {
         {showCityGraph ? (
           <ForceGraph2D
             graphData={{
-              nodes: cityGraph.nodes.map((n) => ({ id: n.id, ...n })),
+              nodes: cityGraph.nodes.map((n) => ({ ...n, id: n.id })),
               links: cityGraph.edges.map((e) => ({ source: e.source, target: e.target })),
             }}
             width={typeof window !== 'undefined' ? window.innerWidth - 80 : 800}

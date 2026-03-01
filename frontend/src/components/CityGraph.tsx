@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
+import ForceGraph2D from 'react-force-graph-2d'
 import { fetchCityGraph, fetchNeighborhoodGraph, type CityGraphData, type GraphNode } from '../api.ts'
 
 const NODE_COLORS: Record<string, string> = {
@@ -10,6 +11,8 @@ const NODE_COLORS: Record<string, string> = {
 
 interface Props {
   activeNeighborhood?: string
+  /** When true, uses ForceGraph2D for drag/zoom/pan. Default false for static SVG. */
+  interactive?: boolean
 }
 
 interface Viewport {
@@ -23,25 +26,41 @@ const MIN_ZOOM = 0.6
 const MAX_ZOOM = 6
 const ZOOM_STEP = 1.15
 
-export default function CityGraph({ activeNeighborhood }: Props) {
+export default function CityGraph({ activeNeighborhood, interactive = false }: Props) {
   const [graphData, setGraphData] = useState<CityGraphData | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [viewMode, setViewMode] = useState<'neighborhood' | 'full'>(activeNeighborhood ? 'neighborhood' : 'full')
   const [selectedNode, setSelectedNode] = useState<GraphNode | null>(null)
+  const [zoomLevel, setZoomLevel] = useState(1)
   const [filters, setFilters] = useState<Record<string, boolean>>({
     neighborhood: true,
     regulation: true,
     entity: true,
     business_type: true,
   })
-  const [zoomLevel, setZoomLevel] = useState(1)
   const svgRef = useRef<SVGSVGElement>(null)
+  const containerRef = useRef<HTMLDivElement>(null)
+  const fgRef = useRef<{ zoom: (k: number, durationMs?: number) => void; zoomToFit: (durationMs?: number, padding?: number) => void } | undefined>(undefined)
+  const [dimensions, setDimensions] = useState({ width: 800, height: 500 })
   const baseViewportRef = useRef<Viewport | null>(null)
   const viewportRef = useRef<Viewport | null>(null)
   const panStateRef = useRef({ active: false, lastX: 0, lastY: 0, moved: false })
   const suppressNodeClickUntilRef = useRef(0)
   const requestVersionRef = useRef(0)
+
+  useEffect(() => {
+    if (!interactive || !containerRef.current) return
+    const el = containerRef.current
+    const update = () => {
+      const rect = el.getBoundingClientRect()
+      if (rect.width > 0 && rect.height > 0) setDimensions({ width: rect.width, height: rect.height })
+    }
+    update()
+    const ro = new ResizeObserver(update)
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [interactive])
 
   const loadGraph = useCallback(async () => {
     const requestVersion = ++requestVersionRef.current
@@ -114,6 +133,7 @@ export default function CityGraph({ activeNeighborhood }: Props) {
   }, [activeNeighborhood, viewMode])
 
   useEffect(() => {
+    if (interactive) return
     const svg = svgRef.current
     if (!svg) return
 
@@ -182,11 +202,11 @@ export default function CityGraph({ activeNeighborhood }: Props) {
       svg.removeEventListener('pointerup', onPointerUp)
       svg.removeEventListener('pointercancel', onPointerUp)
     }
-  }, [applyViewport, zoomViewport])
+  }, [interactive, applyViewport, zoomViewport])
 
-  // Run force simulation and render to SVG
+  // Run force simulation and render to SVG (only when not interactive)
   useEffect(() => {
-    if (!graphData || !svgRef.current) return
+    if (interactive || !graphData || !svgRef.current) return
 
     const svg = svgRef.current
     const width = svg.clientWidth || 800
@@ -325,7 +345,22 @@ export default function CityGraph({ activeNeighborhood }: Props) {
     const defaultViewport = { x: 0, y: 0, width, height }
     baseViewportRef.current = defaultViewport
     applyViewport(defaultViewport)
-  }, [graphData, filters, activeNeighborhood, applyViewport])
+  }, [interactive, graphData, filters, activeNeighborhood, applyViewport])
+
+  // Filtered graph for ForceGraph2D
+  const interactiveGraphData = graphData
+    ? (() => {
+        const filteredNodes = graphData.nodes.filter(n => filters[n.type])
+        const filteredNodeIds = new Set(filteredNodes.map(n => n.id))
+        const filteredEdges = graphData.edges.filter(e =>
+          filteredNodeIds.has(e.source) && filteredNodeIds.has(e.target)
+        )
+        return {
+          nodes: filteredNodes.map(n => ({ ...n, id: n.id })),
+          links: filteredEdges.map(e => ({ source: e.source, target: e.target })),
+        }
+      })()
+    : null
 
   return (
     <div className="border border-white/[0.06] bg-white/[0.01]">
@@ -384,59 +419,82 @@ export default function CityGraph({ activeNeighborhood }: Props) {
       </div>
 
       {/* Graph canvas */}
-      <div className="relative" style={{ height: 500 }}>
-        <div className="absolute top-3 right-3 z-10 flex items-center gap-2 pointer-events-none">
-          <span className="hidden sm:inline text-[10px] font-mono text-white/25">
-            scroll zoom · drag pan
-          </span>
-          <div className="flex items-center gap-1 pointer-events-auto">
-            <button
-              type="button"
-              onClick={() => zoomViewport(false)}
-              className="w-6 h-6 border border-white/[0.12] bg-[#06080d]/90 text-white/60 hover:text-white hover:border-white/35 transition-colors cursor-pointer"
-              aria-label="Zoom out"
-              disabled={!graphData || loading}
-            >
-              -
-            </button>
-            <button
-              type="button"
-              onClick={() => zoomViewport(true)}
-              className="w-6 h-6 border border-white/[0.12] bg-[#06080d]/90 text-white/60 hover:text-white hover:border-white/35 transition-colors cursor-pointer"
-              aria-label="Zoom in"
-              disabled={!graphData || loading}
-            >
-              +
-            </button>
-            <button
-              type="button"
-              onClick={resetViewport}
-              className="px-2 h-6 border border-white/[0.12] bg-[#06080d]/90 text-[10px] font-mono text-white/50 hover:text-white hover:border-white/35 transition-colors cursor-pointer"
-              disabled={!graphData || loading}
-            >
-              reset
-            </button>
-            <span className="text-[10px] font-mono text-white/25 min-w-[40px] text-right">
-              {zoomLevel.toFixed(1)}x
+      <div ref={containerRef} className="relative" style={{ height: 500 }}>
+        {!interactive && (
+          <div className="absolute top-3 right-3 z-10 flex items-center gap-2 pointer-events-none">
+            <span className="hidden sm:inline text-[10px] font-mono text-white/25">
+              scroll zoom · drag pan
             </span>
+            <div className="flex items-center gap-1 pointer-events-auto">
+              <button
+                type="button"
+                onClick={() => zoomViewport(false)}
+                className="w-6 h-6 border border-white/[0.12] bg-[#06080d]/90 text-white/60 hover:text-white hover:border-white/35 transition-colors cursor-pointer"
+                aria-label="Zoom out"
+                disabled={!graphData || loading}
+              >
+                -
+              </button>
+              <button
+                type="button"
+                onClick={() => zoomViewport(true)}
+                className="w-6 h-6 border border-white/[0.12] bg-[#06080d]/90 text-white/60 hover:text-white hover:border-white/35 transition-colors cursor-pointer"
+                aria-label="Zoom in"
+                disabled={!graphData || loading}
+              >
+                +
+              </button>
+              <button
+                type="button"
+                onClick={resetViewport}
+                className="px-2 h-6 border border-white/[0.12] bg-[#06080d]/90 text-[10px] font-mono text-white/50 hover:text-white hover:border-white/35 transition-colors cursor-pointer"
+                disabled={!graphData || loading}
+              >
+                reset
+              </button>
+              <span className="text-[10px] font-mono text-white/25 min-w-[40px] text-right">
+                {zoomLevel.toFixed(1)}x
+              </span>
+            </div>
           </div>
-        </div>
+        )}
         {loading && (
-          <div className="absolute inset-0 flex items-center justify-center">
+          <div className="absolute inset-0 flex items-center justify-center z-10">
             <div className="w-5 h-5 border border-white/20 border-t-white/60 rounded-full animate-spin" />
           </div>
         )}
         {error && (
-          <div className="absolute inset-0 flex items-center justify-center text-xs text-red-400/60 font-mono">
+          <div className="absolute inset-0 flex items-center justify-center text-xs text-red-400/60 font-mono z-10">
             {error}
           </div>
         )}
         {!loading && graphData && graphData.nodes.length === 0 && (
-          <div className="absolute inset-0 flex items-center justify-center text-xs text-white/20 font-mono">
+          <div className="absolute inset-0 flex items-center justify-center text-xs text-white/20 font-mono z-10">
             No graph data &mdash; run <code className="text-white/30">modal run -m modal_app.graph::build_city_graph</code>
           </div>
         )}
-        <svg ref={svgRef} width="100%" height="100%" className="bg-transparent touch-none cursor-grab" />
+        {interactive && interactiveGraphData && interactiveGraphData.nodes.length > 0 ? (
+          <ForceGraph2D
+            ref={fgRef as any}
+            graphData={interactiveGraphData}
+            width={dimensions.width}
+            height={dimensions.height}
+            nodeLabel={(n) => (n as GraphNode).label ?? (n as { id?: string }).id ?? ''}
+            nodeColor={(n) => NODE_COLORS[(n as GraphNode).type] || '#94a3b8'}
+            nodeVal={(n) => Math.max(4, ((n as GraphNode).size ?? 10) / 4)}
+            linkColor={() => 'rgba(255,255,255,0.2)'}
+            backgroundColor="#06080d"
+            onNodeClick={(n) => setSelectedNode(n as GraphNode)}
+            onEngineStop={() => {
+              if (fgRef.current) {
+                fgRef.current.zoomToFit(200, 5)
+                fgRef.current.zoom(1.8, 0)
+              }
+            }}
+          />
+        ) : (
+          <svg ref={svgRef} width="100%" height="100%" className="bg-transparent touch-none cursor-grab" />
+        )}
       </div>
 
       {/* Selected node panel */}

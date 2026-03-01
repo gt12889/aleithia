@@ -4,6 +4,9 @@ import { MemoryGraph, injectStyles } from '@supermemory/memory-graph'
 import '@supermemory/memory-graph/styles.css'
 import type { DocumentWithMemories } from '@supermemory/memory-graph'
 import { api } from '../api.ts'
+
+// Documents must satisfy index signature for internal graph usage
+type DocumentForGraph = DocumentWithMemories & Record<string, unknown>
 import memGraphImg from './mem-grap.png'
 
 injectStyles()
@@ -22,7 +25,7 @@ function normalizeEntries(docId: string, entries: Record<string, unknown>[]): Do
   })) as DocumentWithMemories['memoryEntries']
 }
 
-function normalizeDocs(raw: Record<string, unknown>[]): DocumentWithMemories[] {
+function normalizeDocs(raw: Record<string, unknown>[]): DocumentForGraph[] {
   return raw.map((doc) => {
     const docId = String(doc.id ?? doc.customId ?? `doc-${Math.random().toString(36).slice(2)}`)
     const createdAt = typeof doc.createdAt === 'string' ? doc.createdAt : new Date().toISOString()
@@ -50,13 +53,13 @@ function normalizeDocs(raw: Record<string, unknown>[]): DocumentWithMemories[] {
       status: (doc.status ?? 'done') as DocumentWithMemories['status'],
       createdAt,
       updatedAt,
-    } as DocumentWithMemories
+    } as DocumentForGraph
   })
 }
 
 export default function MemGraph() {
   const navigate = useNavigate()
-  const [documents, setDocuments] = useState<DocumentWithMemories[]>([])
+  const [documents, setDocuments] = useState<DocumentForGraph[]>([])
   const [isLoading, setIsLoading] = useState(true)
   const [isLoadingMore, setIsLoadingMore] = useState(false)
   const [error, setError] = useState<Error | null>(null)
@@ -83,7 +86,7 @@ export default function MemGraph() {
           raw = []
         }
         setDocuments(normalizeDocs(raw))
-        setHasMore(pagination ? pagination.totalPages > 1 : false)
+        setHasMore(pagination ? (pagination.totalPages ?? 0) > 1 : false)
         setPage(1)
         setIsLoading(false)
       })
@@ -112,7 +115,7 @@ export default function MemGraph() {
         raw = []
       }
       setDocuments((prev) => [...prev, ...normalizeDocs(raw)])
-      setHasMore(pagination ? nextPage < pagination.totalPages : false)
+      setHasMore(pagination ? nextPage < (pagination.totalPages ?? 1) : false)
       setPage(nextPage)
     } catch (err) {
       console.error('Failed to load more documents:', err)
@@ -126,9 +129,9 @@ export default function MemGraph() {
     const q = searchQuery.toLowerCase()
     return documents
       .filter((doc) => {
-        const title = ((doc as Record<string, unknown>).title as string) ?? ''
-        const content = ((doc as Record<string, unknown>).content as string) ?? ''
-        const source = ((doc as Record<string, unknown>).source as string) ?? ''
+        const title = (doc as unknown as Record<string, unknown>).title as string ?? ''
+        const content = (doc as unknown as Record<string, unknown>).content as string ?? ''
+        const source = (doc as unknown as Record<string, unknown>).source as string ?? ''
         return title.toLowerCase().includes(q) || content.toLowerCase().includes(q) || source.toLowerCase().includes(q)
       })
       .map((doc) => doc.id)

@@ -1,15 +1,15 @@
 import { Suspense, useEffect, useState } from 'react'
 import { SignedIn, SignedOut, SignInButton, SignUpButton, useUser } from '@clerk/clerk-react'
 import Spline from '@splinetool/react-spline'
+import BlurText from './BlurText'
 import type { Application } from '@splinetool/runtime'
 import CityGlobe from './CityGlobe'
 import LogoLoop from './LogoLoop'
-import { ArizeAILogo, ModelLogo } from './SponsorLogos'
+import { ArizeAILogo, ModelLogo, OpenAILogo } from './SponsorLogos'
 
 const SPONSOR_LOGO_SVGS = {
   modal: '/logo/modal-wordmark.svg',
   supermemory: '/logo/logo-fullmark.svg',
-  chatgpt: '/logo/chatgpt.jpg',
   huggingface: '/logo/hf-logo.svg',
 }
 
@@ -43,7 +43,7 @@ const SPONSOR_LOGOS = [
   { node: logoImg(SPONSOR_LOGO_SVGS.modal, 'Modal'), large: false },
   { node: logoImg(SPONSOR_LOGO_SVGS.supermemory, 'SuperMemory'), large: false },
   { node: <ArizeAILogo />, large: true },
-  { node: logoImg(SPONSOR_LOGO_SVGS.chatgpt, 'ChatGPT', true), large: true, extraLarge: true },
+  { node: <OpenAILogo />, large: true, extraLarge: true },
   { node: <ModelLogo name="Qwen3-8B" />, large: true },
   { node: <HfLogoWithName name="BART-large-MNLI" />, large: true },
   { node: <ModelLogo name="RoBERTa-Sentiment" />, large: true },
@@ -171,12 +171,22 @@ export default function LandingPage({ onGetStarted, onViewSource, onViewWhyUs }:
           {/* Hero: center viewport */}
           <div className="col-span-3 col-start-1 row-start-2 flex items-center justify-center px-10">
             <div className="max-w-3xl text-center">
-              <p className="text-xs font-mono font-medium uppercase tracking-[0.3em] text-white/40 mb-6">
-                 Business Intelligence Platform
-              </p>
+              <BlurText
+                text="Business Intelligence Platform"
+                delay={80}
+                animateBy="words"
+                direction="top"
+                className="text-xs font-mono font-medium uppercase tracking-[0.3em] text-white/40 mb-6 justify-center"
+              />
               <h1 className="text-5xl sm:text-7xl font-bold tracking-tight text-white mb-8 leading-[1.05]">
-                ALETHIA
-                <br />
+                <BlurText
+                  text="ALETHIA"
+                  delay={120}
+                  animateBy="chars"
+                  direction="top"
+                  as="span"
+                  className="w-full justify-center"
+                />
               </h1>
               <p className="text-base sm:text-lg text-white/50 mb-12 max-w-xl mx-auto leading-relaxed">
                 Live data sources,
@@ -209,7 +219,7 @@ export default function LandingPage({ onGetStarted, onViewSource, onViewWhyUs }:
             aria-label="Scroll to next section"
           >
             <svg
-              className="w-6 h-6 animate-bounce"
+              className="w-12 h-12 animate-bounce"
               viewBox="0 0 24 24"
               fill="currentColor"
             >
@@ -249,7 +259,7 @@ export default function LandingPage({ onGetStarted, onViewSource, onViewWhyUs }:
       </section>
 
       {/* ── City Graph Globe ── */}
-      <section className="relative py-20 overflow-hidden border-t border-white/[0.04]">
+      <section className="relative py-20 overflow-hidden border-t border-white/[0.04] isolate" style={{ minHeight: 500 }}>
         <div className="relative z-10 max-w-7xl mx-auto px-10">
           <h2 className="text-3xl sm:text-4xl font-bold tracking-tight text-white mb-12">
             One city. Every signal.
@@ -291,6 +301,15 @@ export default function LandingPage({ onGetStarted, onViewSource, onViewWhyUs }:
             </div>
           </div>
         </div>
+
+        {/* Bottom fade overlay */}
+        <div
+          className="pointer-events-none absolute bottom-0 left-0 right-0 h-32 z-20"
+          style={{
+            background: 'linear-gradient(to bottom, transparent, #06080d 85%)',
+          }}
+          aria-hidden
+        />
       </section>
 
       {/* ── Live Stats ── */}
@@ -321,11 +340,11 @@ export default function LandingPage({ onGetStarted, onViewSource, onViewWhyUs }:
 
       {/* ── Memory Graph ── */}
       <section className="relative border-t border-white/[0.04]">
-        <div className="px-10 py-16 max-w-7xl ml-auto text-right">
+        <div className="px-10 py-16 max-w-7xl mx-auto text-left">
           <h2 className="text-3xl sm:text-4xl font-bold tracking-tight text-white mb-2">
             Memory Graph
           </h2>
-          <p className="text-sm text-white/50 mb-8 max-w-xl ml-auto">
+          <p className="text-sm text-white/50 mb-8 max-w-xl">
             Documents connected by semantic similarity.
           </p>
           <button

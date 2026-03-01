@@ -171,8 +171,8 @@ extend({ EarthMaterial, GlobeAtmosphereMaterial })
 
 declare module '@react-three/fiber' {
   interface ThreeElements {
-    earthMaterial: THREE.ShaderMaterial
-    globeAtmosphereMaterial: THREE.ShaderMaterial
+    earthMaterial: object
+    globeAtmosphereMaterial: object
   }
 }
 
