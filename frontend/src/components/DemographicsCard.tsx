@@ -35,10 +35,17 @@ export default function DemographicsCard({ metrics, demographics, cctv }: Props)
     { label: 'Reviews', value: metrics.review_count || 0, fmt: (v: number) => v > 0 ? v.toString() : 'N/A' },
   ]
 
+  // Use avg_review_rating (0-5 scale) as a more meaningful sentiment proxy when raw sentiment is low
+  const sentimentScore = (() => {
+    const raw = metrics.sentiment || 0
+    const reviewBased = metrics.avg_review_rating > 0 ? Math.round(metrics.avg_review_rating * 20) : 0
+    return Math.max(raw, reviewBased)
+  })()
+
   const scores = [
-    { label: 'Regulatory Density', value: metrics.regulatory_density || 0 },
-    { label: 'Business Activity', value: metrics.business_activity || 0 },
-    { label: 'Sentiment', value: metrics.sentiment || 0 },
+    { label: 'Regulatory Density', value: metrics.regulatory_density || 0, max: 100 },
+    { label: 'Business Activity', value: metrics.business_activity || 0, max: 100 },
+    { label: 'Sentiment', value: sentimentScore, max: 100 },
   ]
 
   return (
@@ -120,20 +127,25 @@ export default function DemographicsCard({ metrics, demographics, cctv }: Props)
       </div>
 
       <div className="space-y-3">
-        {scores.map(score => (
-          <div key={score.label}>
-            <div className="flex items-center justify-between text-[10px] font-mono mb-1">
-              <span className="text-white/30 uppercase tracking-wider">{score.label}</span>
-              <span className="text-white/20">{score.value.toFixed(1)}</span>
+        {scores.map(score => {
+          const normalized = Math.min(Math.round((score.value / score.max) * 100), 100)
+          return (
+            <div key={score.label}>
+              <div className="flex items-center justify-between text-[10px] font-mono mb-1">
+                <span className="text-white/30 uppercase tracking-wider">{score.label}</span>
+                <span className="text-white/20">{score.value > 0 ? `${normalized}/100` : 'N/A'}</span>
+              </div>
+              <div className="w-full bg-white/[0.04] h-1">
+                <div
+                  className={`h-1 transition-all ${
+                    normalized >= 60 ? 'bg-emerald-400/50' : normalized >= 30 ? 'bg-amber-400/50' : 'bg-white/40'
+                  }`}
+                  style={{ width: `${score.value > 0 ? normalized : 0}%` }}
+                />
+              </div>
             </div>
-            <div className="w-full bg-white/[0.04] h-1">
-              <div
-                className="h-1 bg-white/40 transition-all"
-                style={{ width: `${Math.min(score.value, 100)}%` }}
-              />
-            </div>
-          </div>
-        ))}
+          )
+        })}
       </div>
 
       {metrics.risk_score > 0 && (

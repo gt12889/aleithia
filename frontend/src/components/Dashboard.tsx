@@ -18,7 +18,6 @@ import DemographicsCard from './DemographicsCard.tsx'
 import PipelineMonitor from './PipelineMonitor.tsx'
 import MLMonitor from './MLMonitor.tsx'
 import CCTVFeedCard from './CCTVFeedCard.tsx'
-import InsightsCard from './InsightsCard.tsx'
 import LocationReportPanel from './LocationReportPanel.tsx'
 import Drawer from './Drawer.tsx'
 import ProfilePage from './ProfilePage.tsx'
@@ -71,7 +70,7 @@ function computeRiskScore(data: NeighborhoodData, profile: UserProfile): RiskSco
       pct: Math.round(failRate * 100),
       source: 'food_inspections',
       severity: failRate > 0.4 ? 'high' as const : failRate > 0.2 ? 'medium' as const : 'low' as const,
-      description: `${stats.passed} passed, ${stats.failed} failed out of ${stats.total} recent food inspections in the area.`,
+      description: `${stats.passed} passed, ${stats.failed} failed out of ${stats.total} recent food inspections. ${failRate > 0.3 ? 'Elevated failure rate suggests stricter enforcement.' : 'Healthy pass rate indicates manageable regulatory environment.'}`,
     })
   }
 
@@ -81,7 +80,7 @@ function computeRiskScore(data: NeighborhoodData, profile: UserProfile): RiskSco
       pct: Math.min(data.permit_count * 5, 30),
       source: 'building_permits',
       severity: data.permit_count > 10 ? 'medium' as const : 'low' as const,
-      description: 'Active construction and renovation activity suggests a developing area.',
+      description: `${data.permit_count} active permits indicate ${data.permit_count > 10 ? 'heavy' : 'moderate'} construction activity. Expect temporary disruptions but long-term neighborhood improvement.`,
     })
   }
 
@@ -91,7 +90,7 @@ function computeRiskScore(data: NeighborhoodData, profile: UserProfile): RiskSco
       pct: Math.min(data.license_count * 3, 25),
       source: 'business_licenses',
       severity: data.license_count > 15 ? 'medium' as const : 'low' as const,
-      description: 'Existing business density indicates competition level and market viability.',
+      description: `${data.license_count} licensed businesses nearby. ${data.license_count > 20 ? 'High density means strong demand but intense competition.' : 'Moderate density suggests room for new entrants.'}`,
     })
   }
 
@@ -101,7 +100,7 @@ function computeRiskScore(data: NeighborhoodData, profile: UserProfile): RiskSco
       pct: 10,
       source: 'news',
       severity: 'low' as const,
-      description: 'Local news coverage indicates community activity and awareness.',
+      description: `${data.news.length} local news articles covering the area. Media attention indicates community visibility and foot traffic potential.`,
     })
   }
 
@@ -111,7 +110,7 @@ function computeRiskScore(data: NeighborhoodData, profile: UserProfile): RiskSco
       pct: 15,
       source: 'politics',
       severity: data.politics.length > 5 ? 'medium' as const : 'low' as const,
-      description: 'Recent city council activity related to this area.',
+      description: `${data.politics.length} active city council items related to this area.`,
     })
   }
 
@@ -122,18 +121,68 @@ function computeRiskScore(data: NeighborhoodData, profile: UserProfile): RiskSco
       pct: density === 'high' ? 5 : density === 'medium' ? 10 : 15,
       source: 'cctv',
       severity: density === 'low' ? 'medium' as const : 'low' as const,
-      description: `Live CCTV analysis shows ~${data.cctv.avg_pedestrians} avg pedestrians and ~${data.cctv.avg_vehicles} avg vehicles across ${data.cctv.cameras.length} nearby cameras.`,
+      description: `Live CCTV shows ~${data.cctv.avg_pedestrians} avg pedestrians and ~${data.cctv.avg_vehicles} avg vehicles across ${data.cctv.cameras.length} cameras. ${density === 'high' ? 'Strong foot traffic supports walk-in business.' : density === 'low' ? 'Low foot traffic — consider marketing strategies to drive customers.' : 'Moderate foot traffic with growth potential.'}`,
     })
   }
 
   const metrics = data.metrics || {}
+
+  // Demographics factor from census data
+  const demo = data.demographics
+  if (demo && demo.total_population && demo.total_population > 0) {
+    const income = demo.median_household_income || 0
+    const pop = demo.total_population
+    const rent = demo.median_gross_rent || 0
+    const unemployment = demo.unemployment_rate || 0
+
+    let severity: 'low' | 'medium' | 'high' = 'low'
+    if (income < 30000 || unemployment > 10) severity = 'high'
+    else if (income < 50000 || unemployment > 7) severity = 'medium'
+
+    const parts: string[] = []
+    if (pop) parts.push(`~${Math.round(pop / 1000)}K residents`)
+    if (income) parts.push(`$${Math.round(income / 1000)}K median income`)
+
+    // Build a contextual insight instead of listing raw numbers
+    const chicagoMedianIncome = 65000
+    const chicagoMedianRent = 1200
+    const chicagoUnemployment = 5.5
+
+    let insight = ''
+    if (income >= chicagoMedianIncome * 1.2) {
+      insight += `Income is ${Math.round(((income / chicagoMedianIncome) - 1) * 100)}% above Chicago's median — strong purchasing power for premium positioning.`
+    } else if (income >= chicagoMedianIncome * 0.8) {
+      insight += `Income is in line with Chicago's median — broad, middle-market customer base.`
+    } else {
+      insight += `Income is ${Math.round((1 - (income / chicagoMedianIncome)) * 100)}% below Chicago's median — price-sensitive market, consider value positioning.`
+    }
+
+    if (rent && rent > chicagoMedianRent * 1.15) {
+      insight += ` Rent runs $${Math.round(rent - chicagoMedianRent)}/mo above city average, reflecting desirability but higher operating costs.`
+    } else if (rent && rent < chicagoMedianRent * 0.85) {
+      insight += ` Rent is $${Math.round(chicagoMedianRent - rent)}/mo below city average — lower overhead gives pricing flexibility.`
+    }
+
+    if (unemployment > chicagoUnemployment + 2) {
+      insight += ` Unemployment (${unemployment}%) is elevated vs. city avg (${chicagoUnemployment}%) — labor availability is high but spending may be constrained.`
+    }
+
+    factors.push({
+      label: `Demographics: ${parts.slice(0, 2).join(', ')}`,
+      pct: 15,
+      source: 'public_data',
+      severity,
+      description: insight,
+    })
+  }
+
   if (metrics.active_permits) {
     factors.push({
       label: `Permit density: ${metrics.active_permits} in neighborhood`,
       pct: 10,
-      source: 'public_data',
+      source: 'building_permits',
       severity: 'low' as const,
-      description: 'Overall permit activity density across the neighborhood.',
+      description: 'Active construction and renovation permits signal neighborhood investment and development activity.',
     })
   }
 
@@ -149,7 +198,7 @@ function computeRiskScore(data: NeighborhoodData, profile: UserProfile): RiskSco
       pct: Math.round((5 - avgRating) * 5),
       source: 'reviews',
       severity: avgRating < 3.5 ? 'high' as const : avgRating < 4.0 ? 'medium' as const : 'low' as const,
-      description: 'Average business review rating in the area.',
+      description: `Average business review rating in the area. Higher ratings indicate strong customer satisfaction and service quality.`,
     })
   }
 
@@ -164,14 +213,50 @@ function computeRiskScore(data: NeighborhoodData, profile: UserProfile): RiskSco
       pct: congested.length * 10,
       source: 'traffic',
       severity: congested.length > 3 ? 'high' as const : 'medium' as const,
-      description: 'Heavy traffic may affect foot traffic and deliveries.',
+      description: 'Heavy traffic congestion may affect deliveries and customer access but also indicates high area activity.',
     })
   }
 
   const failRate = stats.total > 0 ? stats.failed / stats.total : 0
-  const overallScore = Math.min(10, Math.max(1,
-    3 + failRate * 4 + (data.license_count > 10 ? 1 : 0) + (data.politics.length > 3 ? 1 : 0)
-  ))
+
+  // Dynamic risk scoring across multiple data signals
+  let riskPoints = 0
+  let signalCount = 0
+
+  // Inspection fail rate (0-3 points of risk)
+  if (stats.total > 0) {
+    riskPoints += failRate * 3
+    signalCount++
+  }
+
+  // Permit activity (high = more disruption risk, 0-2 points)
+  if (data.permit_count > 0) {
+    riskPoints += Math.min(data.permit_count / 10, 2)
+    signalCount++
+  }
+
+  // License competition (high = more competition risk, 0-2 points)
+  if (data.license_count > 0) {
+    riskPoints += Math.min(data.license_count / 15, 2)
+    signalCount++
+  }
+
+  // Political activity (more = more regulatory risk, 0-1.5 points)
+  if (data.politics.length > 0) {
+    riskPoints += Math.min(data.politics.length / 5, 1.5)
+    signalCount++
+  }
+
+  // Traffic congestion (0-1.5 points)
+  if (congested.length > 0) {
+    riskPoints += Math.min(congested.length / 3, 1.5)
+    signalCount++
+  }
+
+  // Scale to 1-10, default to 5 if no signals
+  const overallScore = signalCount > 0
+    ? Math.min(10, Math.max(1, riskPoints * (10 / (signalCount * 2))))
+    : 5
 
   const totalPct = factors.reduce((s, f) => s + f.pct, 0) || 1
   factors.forEach(f => { f.pct = Math.round((f.pct / totalPct) * 100) })
@@ -581,9 +666,6 @@ export default function Dashboard({ profile, onReset, token, onProfileUpdate, in
                     {neighborhoodData?.metrics && (
                       <DemographicsCard metrics={neighborhoodData.metrics} demographics={neighborhoodData.demographics} cctv={neighborhoodData.cctv} />
                     )}
-                    {neighborhoodData && (
-                      <InsightsCard data={neighborhoodData} profile={profile} />
-                    )}
                   </div>
 
                   {neighborhoodData?.traffic && neighborhoodData.traffic.length > 0 && (
@@ -691,7 +773,7 @@ export default function Dashboard({ profile, onReset, token, onProfileUpdate, in
         </div>
 
         {/* Right: Report */}
-        <div className="w-96 border-l-2 border-[#2B95D6]/40 p-4" style={{ boxShadow: '-4px 0 24px rgba(43, 149, 214, 0.08)' }}>
+        <div className="w-96 border-l border-white/[0.06] p-4 overflow-y-auto space-y-4">
           {/*
             <ChatPanel
               messages={messages}

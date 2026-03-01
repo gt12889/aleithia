@@ -1,17 +1,11 @@
 import { useState, useMemo } from 'react'
-import type { NeighborhoodData, UserProfile, RiskProfile, CategoryScore } from '../types/index.ts'
+import type { NeighborhoodData, UserProfile, CategoryScore } from '../types/index.ts'
 import { computeInsights } from '../insights.ts'
 
 interface Props {
   data: NeighborhoodData
   profile: UserProfile
 }
-
-const PROFILES: { key: RiskProfile; label: string }[] = [
-  { key: 'conservative', label: 'Conservative' },
-  { key: 'growth', label: 'Growth' },
-  { key: 'budget', label: 'Budget' },
-]
 
 function signalColor(signal: string) {
   if (signal === 'positive') return 'text-green-400'
@@ -85,12 +79,11 @@ function CategoryRow({ cat, expanded, onToggle }: { cat: CategoryScore; expanded
 }
 
 export default function InsightsCard({ data, profile }: Props) {
-  const [riskProfile, setRiskProfile] = useState<RiskProfile>('conservative')
   const [expandedId, setExpandedId] = useState<string | null>(null)
 
   const insights = useMemo(
-    () => computeInsights(data, profile, riskProfile),
-    [data, profile, riskProfile],
+    () => computeInsights(data, profile, 'conservative'),
+    [data, profile],
   )
 
   if (insights.coverageCount === 0) return null
@@ -98,25 +91,9 @@ export default function InsightsCard({ data, profile }: Props) {
   return (
     <div className="border border-white/[0.06] bg-white/[0.02]">
       {/* Header */}
-      <div className="px-5 pt-5 pb-3 flex items-center justify-between">
+      <div className="px-5 pt-5 pb-3">
         <div className="text-[10px] font-mono uppercase tracking-wider text-white/30">
           Risk Assessment Score
-        </div>
-        <div className="flex gap-0 border border-white/[0.08] rounded overflow-hidden">
-          {PROFILES.map(p => (
-            <button
-              key={p.key}
-              type="button"
-              onClick={() => setRiskProfile(p.key)}
-              className={`px-3 py-1 text-[10px] font-mono uppercase tracking-wider transition-colors cursor-pointer ${
-                riskProfile === p.key
-                  ? 'bg-white/[0.06] text-white border-white/[0.1]'
-                  : 'text-white/30 hover:text-white/50'
-              }`}
-            >
-              {p.label}
-            </button>
-          ))}
         </div>
       </div>
 
@@ -152,6 +129,13 @@ export default function InsightsCard({ data, profile }: Props) {
             onToggle={() => setExpandedId(expandedId === cat.id ? null : cat.id)}
           />
         ))}
+      </div>
+
+      {/* Bottom risk assessment */}
+      <div className="px-5 pt-5 pb-3">
+        <div className="text-[10px] font-mono uppercase tracking-wider text-white/30">
+          Risk Assessment with Economic/Market/Demographic/Community
+        </div>
       </div>
     </div>
   )

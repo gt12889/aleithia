@@ -149,7 +149,7 @@ function scoreEconomic(data: NeighborhoodData): CategoryScore | null {
 
   return {
     id: 'economic', name: 'Economic', score, subMetrics: subs,
-    claim: `${permitCount} active permits, $${Math.round(totalFees / 1000)}K invested, ${newBuilds} new builds — ${signalLabel} economic activity`,
+    claim: `${permitCount} active permits, $${Math.round(totalFees / 1000)}K invested, ${newBuilds} new builds, ${licenseCount} active businesses`,
     signal: sig, signalLabel,
     sources: ['building_permits', 'business_licenses'],
     dataPoints: permitCount + licenseCount,
