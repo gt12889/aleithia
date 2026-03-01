@@ -1,4 +1,4 @@
-import type { DataSources, GeoJSON, NeighborhoodData, Document, CCTVTimeseries, StreetscapeData, VisionAssessData, ParkingData } from './types'
+import type { DataSources, GeoJSON, NeighborhoodData, Document, CCTVTimeseries, StreetscapeData, VisionAssessData, ParkingData, SocialTrendsData } from './types'
 
 // Modal deployed endpoint — set via VITE_MODAL_URL, fallback to local proxy
 export const API_BASE = import.meta.env.VITE_MODAL_URL || '/api/data'
@@ -341,6 +341,11 @@ export const api = {
 
   parkingAnnotatedUrl: (neighborhood: string) =>
     `${API_BASE}/parking/annotated/${encodeURIComponent(neighborhood)}`,
+
+  socialTrends: (neighborhood: string, businessType?: string) => {
+    const qs = businessType ? `?business_type=${encodeURIComponent(businessType)}` : ''
+    return fetchJSON<SocialTrendsData>(`/social-trends/${encodeURIComponent(neighborhood)}${qs}`)
+  },
 }
 
 export interface GraphNode {

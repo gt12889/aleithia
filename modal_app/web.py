@@ -1560,6 +1560,155 @@ async def neighborhood(name: str, business_type: str = ""):
             span_ctx.__exit__(None, None, None)
 
 
+# ── Social Media Trends ──────────────────────────────────────────────────────
+
+@web_app.get("/social-trends/{neighborhood}")
+async def social_trends(neighborhood: str, business_type: str = ""):
+    """LLM-synthesized social media trends from Reddit + TikTok data."""
+    from modal_app.instrumentation import get_tracer
+
+    tracer = get_tracer("alethia.web")
+    span_ctx = tracer.start_as_current_span("social-trends") if tracer else None
+    span = span_ctx.__enter__() if span_ctx else None
+    try:
+        if span:
+            span.set_attribute("openinference.span.kind", "CHAIN")
+            span.set_attribute("input.value", neighborhood)
+            span.set_attribute("social_trends.business_type", business_type or "general")
+
+        volume.reload()
+
+        # Validate neighborhood
+        valid_names = set(n.lower() for n in CHICAGO_NEIGHBORHOODS) | set(
+            n.lower() for n in COMMUNITY_AREA_MAP.values()
+        )
+        if neighborhood.lower() not in valid_names:
+            return JSONResponse({"error": f"Unknown neighborhood: {neighborhood}"}, status_code=404)
+
+        # Load and filter social data
+        all_reddit = _load_docs("reddit")
+        all_tiktok = [_normalize_tiktok_doc(d) for d in _load_docs("tiktok")]
+
+        reddit_docs = rank_reddit_docs(
+            _filter_by_neighborhood(all_reddit, neighborhood),
+            business_type=business_type or "small business",
+            neighborhood=neighborhood,
+            min_score=0,
+        )
+        tiktok_docs = _rank_tiktok_docs(all_tiktok, business_type or "small business", neighborhood)
+
+        reddit_count = len(reddit_docs)
+        tiktok_count = len(tiktok_docs)
+
+        if span:
+            span.set_attribute("social_trends.reddit_count", reddit_count)
+            span.set_attribute("social_trends.tiktok_count", tiktok_count)
+
+        # Short-circuit if no social content
+        if reddit_count == 0 and tiktok_count == 0:
+            return {
+                "neighborhood": neighborhood,
+                "business_type": business_type,
+                "trends": [],
+                "source_counts": {"reddit": 0, "tiktok": 0},
+            }
+
+        # Build content for LLM
+        reddit_snippets = []
+        for d in reddit_docs[:10]:
+            title = d.get("title", "")
+            content = d.get("content", "")[:300]
+            reddit_snippets.append(f"[Reddit] {title}: {content}")
+
+        tiktok_snippets = []
+        for d in tiktok_docs[:5]:
+            title = d.get("title", "")
+            transcript = d.get("content", "")[:500]
+            views = d.get("metadata", {}).get("views", "")
+            tiktok_snippets.append(f"[TikTok] {title} (views: {views}): {transcript}")
+
+        all_snippets = "\n\n".join(reddit_snippets + tiktok_snippets)
+
+        system_prompt = (
+            "Extract exactly 3 concise, business-relevant social media trends from the provided "
+            "posts/transcripts. Respond ONLY with a JSON array of 3 objects with `title` (max 8 words) "
+            "and `detail` (1-2 sentences). Focus on consumer behavior, neighborhood sentiment, "
+            "and emerging opportunities."
+        )
+        user_prompt = (
+            f"Neighborhood: {neighborhood}\n"
+            f"Business type: {business_type or 'general'}\n\n"
+            f"Social media content:\n{all_snippets}"
+        )
+
+        # Call GPT-4o (fast, no cold start) with Qwen3-8B fallback
+        from modal_app.openai_utils import openai_available, get_openai_client
+
+        msgs = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ]
+
+        if openai_available():
+            try:
+                client = get_openai_client()
+                oai_resp = await client.chat.completions.create(
+                    model="gpt-4o",
+                    messages=msgs,
+                    max_tokens=512,
+                    temperature=0.4,
+                )
+                raw = oai_resp.choices[0].message.content or ""
+            except Exception as e:
+                print(f"GPT-4o social-trends failed, falling back to Qwen3: {e}")
+                llm_cls = modal.Cls.from_name("alethia", "AlethiaLLM")
+                llm = llm_cls()
+                raw = await llm.generate.remote.aio(msgs, max_tokens=512, temperature=0.4)
+        else:
+            llm_cls = modal.Cls.from_name("alethia", "AlethiaLLM")
+            llm = llm_cls()
+            raw = await llm.generate.remote.aio(msgs, max_tokens=512, temperature=0.4)
+
+        # Parse JSON response (strip code fences if present)
+        text = raw.strip()
+        if text.startswith("```"):
+            text = re.sub(r"^```(?:json)?\s*", "", text)
+            text = re.sub(r"\s*```$", "", text)
+
+        try:
+            trends = json.loads(text)
+        except json.JSONDecodeError:
+            # Try to extract JSON array from response
+            match = re.search(r"\[.*\]", text, re.DOTALL)
+            if match:
+                trends = json.loads(match.group())
+            else:
+                trends = []
+
+        # Validate structure
+        validated = []
+        for t in trends[:3]:
+            if isinstance(t, dict) and "title" in t and "detail" in t:
+                validated.append({"title": str(t["title"]), "detail": str(t["detail"])})
+
+        if span:
+            span.set_attribute("social_trends.trend_count", len(validated))
+
+        return {
+            "neighborhood": neighborhood,
+            "business_type": business_type,
+            "trends": validated,
+            "source_counts": {"reddit": reddit_count, "tiktok": tiktok_count},
+        }
+    except Exception as e:
+        if span:
+            span.set_attribute("error", str(e))
+        raise
+    finally:
+        if span_ctx:
+            span_ctx.__exit__(None, None, None)
+
+
 # ── User settings ─────────────────────────────────────────────────────────────
 
 SETTINGS_PATH = Path(PROCESSED_DATA_PATH) / "user_settings.json"
