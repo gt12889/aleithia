@@ -4,8 +4,10 @@ Endpoints: /chat (streaming SSE), /brief, /alerts, /status, /metrics, /sources, 
            /news, /politics, /inspections, /permits, /licenses, /summary
 Modal features: @modal.asgi_app, streaming SSE
 """
+import base64
 import json
 import os
+import re
 import time
 import uuid
 from datetime import datetime, timezone
@@ -17,7 +19,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
-from modal_app.volume import app, volume, web_image, VOLUME_MOUNT, RAW_DATA_PATH, PROCESSED_DATA_PATH
+from modal_app.volume import app, volume, web_image, sandbox_image, VOLUME_MOUNT, RAW_DATA_PATH, PROCESSED_DATA_PATH
 from modal_app.common import CHICAGO_NEIGHBORHOODS, COMMUNITY_AREA_MAP, detect_neighborhood, neighborhood_to_ca
 
 web_app = FastAPI(title="Alethia API", version="2.0")
@@ -414,6 +416,7 @@ def _load_cctv_for_neighborhood(name: str) -> dict:
     from modal_app.common import NEIGHBORHOOD_CENTROIDS
     import math
 
+    volume.reload()
     analysis_dir = Path(PROCESSED_DATA_PATH) / "cctv" / "analysis"
     if not analysis_dir.exists():
         return {"cameras": [], "avg_pedestrians": 0, "avg_vehicles": 0, "density": "unknown"}
@@ -437,7 +440,7 @@ def _load_cctv_for_neighborhood(name: str) -> dict:
         except Exception:
             continue
 
-    # Filter by distance (< 5km from neighborhood centroid)
+    # Filter by distance (< 10km from neighborhood centroid)
     for cam_id, data in latest_by_cam.items():
         # Get lat/lng from raw metadata
         meta_dir = Path(RAW_DATA_PATH) / "cctv"
@@ -468,7 +471,7 @@ def _load_cctv_for_neighborhood(name: str) -> dict:
              * math.sin(dlon / 2) ** 2)
         dist = R * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
 
-        if dist < 5:
+        if dist < 10:
             cameras.append({
                 "camera_id": cam_id,
                 "lat": lat,
@@ -793,6 +796,7 @@ async def summary():
 @web_app.get("/cctv/latest")
 async def cctv_latest():
     """Latest CCTV analysis per camera: counts, density, location."""
+    volume.reload()
     analysis_dir = Path(PROCESSED_DATA_PATH) / "cctv" / "analysis"
     if not analysis_dir.exists():
         return {"cameras": [], "count": 0}
@@ -816,6 +820,7 @@ async def cctv_frame(camera_id: str):
     """Serve latest annotated JPEG for a camera."""
     from fastapi.responses import Response
 
+    volume.reload()
     ann_dir = Path(PROCESSED_DATA_PATH) / "cctv" / "annotated"
     if not ann_dir.exists():
         return JSONResponse({"error": "no annotated frames"}, status_code=404)
@@ -842,11 +847,11 @@ async def geo():
 async def graph(page: int = 1, limit: int = 200):
     """Proxy to Supermemory list documents for Memory Graph visualization."""
     empty = {"documents": [], "pagination": {"currentPage": 1, "totalPages": 0}}
-    api_key = os.environ.get("SUPERMEMORY_API_KEY", "")
-    if not api_key:
-        return JSONResponse(empty, status_code=200)
-    import httpx
     try:
+        api_key = os.environ.get("SUPERMEMORY_API_KEY", "")
+        if not api_key:
+            return JSONResponse(empty, status_code=200)
+        import httpx
         async with httpx.AsyncClient(timeout=30) as client:
             resp = await client.post(
                 "https://api.supermemory.ai/v3/documents/documents",
@@ -861,14 +866,17 @@ async def graph(page: int = 1, limit: int = 200):
                     "order": "desc",
                 },
             )
-            resp.raise_for_status()
+            if not resp.is_success:
+                print(f"Supermemory /graph HTTP {resp.status_code}: {resp.text[:200]}")
+                return JSONResponse(empty, status_code=200)
             data = resp.json()
             # Memory Graph expects 'documents'; Supermemory may return 'memories'
             if "memories" in data and "documents" not in data:
                 data["documents"] = data["memories"]
-            return data
+            # Return as JSONResponse to avoid FastAPI serialization issues
+            return JSONResponse(data, status_code=200)
     except Exception as e:
-        print(f"Supermemory /graph error: {e}")
+        print(f"Supermemory /graph error: {type(e).__name__}: {e}")
         return JSONResponse(empty, status_code=200)
 
 
@@ -884,7 +892,7 @@ async def gpu_metrics():
         "t4_cctv": {"status": "cold"},
     }
 
-    # Only query non-batched GPU classes (batched classes can't have extra methods)
+    # Query non-batched GPU classes directly (batched classes can't have extra methods)
     gpu_classes = [
         ("AlethiaLLM", "h100_llm"),
         ("TrafficAnalyzer", "t4_cctv"),
@@ -905,6 +913,39 @@ async def gpu_metrics():
         *[_fetch(name, key) for name, key in gpu_classes],
         return_exceptions=True,
     )
+
+    # Infer classifier status from enriched docs — @modal.batched classes
+    # can't expose a gpu_metrics method, so we check the queue drainer
+    # (process_queue_batch, 2min cron) activity via enriched file timestamps.
+    # scaledown_window=120s means containers stay warm ~2min after last call.
+    try:
+        enriched_dir = Path(PROCESSED_DATA_PATH) / "enriched"
+        if enriched_dir.exists():
+            enriched_files = list(enriched_dir.rglob("*.json"))
+            enriched_count = len(enriched_files)
+            if enriched_files:
+                latest = max(enriched_files, key=lambda f: f.stat().st_mtime)
+                last_enriched = latest.stat().st_mtime
+                age_seconds = time.time() - last_enriched
+                # scaledown_window=120 + cron every 2min → warm if enriched within ~4min
+                if age_seconds < 240:
+                    warm_status = {"status": "active", "gpu_name": "NVIDIA T4", "inferred": True, "enriched_count": enriched_count}
+                    results["t4_classifier"] = warm_status
+                    results["t4_sentiment"] = warm_status
+                else:
+                    idle_status = {"status": "cold", "reason": "idle", "enriched_count": enriched_count, "last_run_ago_s": round(age_seconds)}
+                    results["t4_classifier"] = idle_status
+                    results["t4_sentiment"] = idle_status
+            else:
+                no_data = {"status": "cold", "reason": "no_data", "enriched_count": 0}
+                results["t4_classifier"] = no_data
+                results["t4_sentiment"] = no_data
+        else:
+            no_data = {"status": "cold", "reason": "no_data", "enriched_count": 0}
+            results["t4_classifier"] = no_data
+            results["t4_sentiment"] = no_data
+    except Exception:
+        pass
 
     return results
 
@@ -929,6 +970,218 @@ async def demo_scale(request: Request):
         run_classify=run_classify,
     )
     return result
+
+
+# ── Deep Dive: AI-generated data analysis via Modal Sandbox ──────────────────
+
+CODEGEN_SYSTEM_PROMPT = """You are a data analyst. Write a self-contained Python script that answers the user's question using real data files.
+
+Rules:
+- Read data from /data/raw/{source}/ and /data/processed/enriched/ (JSON files)
+- Write results to /output/result.json (required) and optionally /output/chart.png
+- result.json must have: {"title": str, "summary": str, "stats": {key: value}}
+- Only use: json, os, pathlib, glob, collections, datetime, pandas, numpy, matplotlib, seaborn
+- matplotlib.use("Agg") must be called before any plotting
+- Max 80 lines. No network calls, no subprocess, no sys.exit.
+- Create /output/ directory at the start: os.makedirs("/output", exist_ok=True)
+- Always wrap file reads in try/except to handle missing or malformed files gracefully
+- Output only the Python code in a ```python``` fence. No explanation."""
+
+
+def _discover_data_files(neighborhood: str | None = None) -> dict:
+    """Scan volume for available data files so the LLM knows what exists."""
+    sources = {}
+    raw = Path(RAW_DATA_PATH)
+    if not raw.exists():
+        return sources
+
+    for source_dir in sorted(raw.iterdir()):
+        if not source_dir.is_dir():
+            continue
+        json_files = list(source_dir.rglob("*.json"))[:20]
+        if not json_files:
+            continue
+        # Sample first file for schema keys
+        schema_keys = []
+        try:
+            sample = json.loads(json_files[0].read_text())
+            if isinstance(sample, dict):
+                schema_keys = list(sample.keys())[:10]
+        except Exception:
+            pass
+        sources[source_dir.name] = {
+            "count": len(list(source_dir.rglob("*.json"))),
+            "sample_path": str(json_files[0]),
+            "schema_keys": schema_keys,
+        }
+
+    # Check enriched
+    enriched = Path(PROCESSED_DATA_PATH) / "enriched"
+    if enriched.exists():
+        json_files = list(enriched.rglob("*.json"))[:20]
+        if json_files:
+            schema_keys = []
+            try:
+                sample = json.loads(json_files[0].read_text())
+                if isinstance(sample, dict):
+                    schema_keys = list(sample.keys())[:10]
+            except Exception:
+                pass
+            sources["enriched"] = {
+                "count": len(list(enriched.rglob("*.json"))),
+                "sample_path": str(json_files[0]),
+                "schema_keys": schema_keys,
+            }
+
+    return sources
+
+
+def _build_codegen_prompt(
+    question: str,
+    brief: str,
+    neighborhood: str,
+    business_type: str,
+    available_sources: dict,
+) -> str:
+    source_listing = "\n".join(
+        f"- /data/raw/{src}/: {info['count']} files, keys: {info['schema_keys']}"
+        if src != "enriched"
+        else f"- /data/processed/enriched/: {info['count']} files, keys: {info['schema_keys']}"
+        for src, info in available_sources.items()
+    )
+    brief_truncated = brief[:3000] if brief else "(no brief provided)"
+    return f"""Neighborhood: {neighborhood}
+Business type: {business_type}
+
+User question: {question}
+
+Intelligence brief context:
+{brief_truncated}
+
+Available data on the volume:
+{source_listing}
+
+Write a Python script to analyze this data and answer the question. Include a chart if appropriate."""
+
+
+def _extract_python_code(response: str) -> str | None:
+    """Extract Python code from LLM response."""
+    # Try fenced code block first
+    match = re.search(r"```python\s*\n(.*?)```", response, re.DOTALL)
+    if match:
+        return match.group(1).strip()
+    # Fallback: unfenced code starting with import/from
+    match = re.search(r"^((?:import |from ).*)", response, re.MULTILINE | re.DOTALL)
+    if match:
+        return match.group(1).strip()
+    return None
+
+
+class _AnalyzeRequest(BaseModel):
+    question: str = Field(..., min_length=1, max_length=2000)
+    brief: str = Field(default="")
+    neighborhood: str = Field(default="Loop")
+    business_type: str = Field(default="Restaurant")
+
+
+@web_app.post("/analyze")
+async def analyze(payload: _AnalyzeRequest):
+    """Deep Dive: generate a Python analysis script via LLM, run it in a Modal Sandbox."""
+    from modal_app.instrumentation import get_tracer
+    tracer = get_tracer("alethia.web")
+
+    span_ctx = tracer.start_as_current_span("deep-dive-analyze") if tracer else None
+    span = span_ctx.__enter__() if span_ctx else None
+    try:
+        if span:
+            span.set_attribute("openinference.span.kind", "CHAIN")
+            span.set_attribute("input.value", payload.question)
+            span.set_attribute("deep_dive.neighborhood", payload.neighborhood)
+
+        # 1. Discover available data
+        available = _discover_data_files(payload.neighborhood)
+        if not available:
+            return JSONResponse(
+                {"error": "No data files found on volume"},
+                status_code=404,
+            )
+
+        # 2. Generate analysis code via LLM
+        llm_cls = modal.Cls.from_name("alethia", "AlethiaLLM")
+        llm = llm_cls()
+
+        prompt = _build_codegen_prompt(
+            payload.question,
+            payload.brief,
+            payload.neighborhood,
+            payload.business_type,
+            available,
+        )
+        messages = [
+            {"role": "system", "content": CODEGEN_SYSTEM_PROMPT},
+            {"role": "user", "content": prompt},
+        ]
+        response = await llm.generate.remote.aio(messages, max_tokens=2048, temperature=0.3)
+
+        code = _extract_python_code(response)
+        if not code:
+            return JSONResponse(
+                {"error": "Failed to generate valid analysis code", "raw_response": response[:500]},
+                status_code=500,
+            )
+
+        # 3. Run in Modal Sandbox
+        sb = modal.Sandbox.create(
+            "python", "-c", code,
+            image=sandbox_image,
+            volumes={"/data": volume},
+            timeout=30,
+            app=app,
+        )
+        sb.wait()
+
+        stderr_text = sb.stderr.read()
+        stdout_text = sb.stdout.read()
+
+        # 4. Read results
+        result_data = None
+        chart_b64 = None
+
+        try:
+            result_file = sb.open("/output/result.json", "r")
+            result_data = json.loads(result_file.read())
+            result_file.close()
+        except Exception:
+            # Script may have written to stdout instead
+            if stdout_text.strip():
+                result_data = {"title": "Analysis Result", "summary": stdout_text.strip()[:2000], "stats": {}}
+
+        try:
+            chart_file = sb.open("/output/chart.png", "rb")
+            chart_bytes = chart_file.read()
+            chart_b64 = base64.b64encode(chart_bytes).decode("utf-8")
+            chart_file.close()
+        except Exception:
+            pass
+
+        if span:
+            span.set_attribute("deep_dive.has_chart", chart_b64 is not None)
+            span.set_attribute("deep_dive.code_lines", len(code.splitlines()))
+
+        return {
+            "code": code,
+            "result": result_data or {"title": "Analysis", "summary": "Script completed but produced no result.json", "stats": {}, "raw_output": stdout_text[:2000]},
+            "chart": chart_b64,
+            "stderr": stderr_text[:500] if stderr_text else None,
+        }
+
+    except Exception as e:
+        if span:
+            span.set_attribute("error", str(e))
+        return JSONResponse({"error": str(e)}, status_code=500)
+    finally:
+        if span_ctx:
+            span_ctx.__exit__(None, None, None)
 
 
 @app.function(

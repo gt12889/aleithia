@@ -18,17 +18,33 @@ const BODY = 'text-sm text-white/60 leading-relaxed space-y-3'
 const CODE = 'font-mono text-xs bg-white/[0.06] border border-white/[0.08] rounded px-2 py-1 text-white/80'
 const CARD = 'border border-white/[0.06] rounded-lg p-6 bg-white/[0.02]'
 
+function normalizeEntries(docId: string, entries: Record<string, unknown>[]): DocumentWithMemories['memoryEntries'] {
+  return entries.map((e) => ({
+    ...e,
+    id: (e.id ?? '') as string,
+    documentId: (e.documentId ?? docId) as string,
+    content: (e.content ?? e.memory ?? '') as string | null,
+    createdAt: (e.createdAt ?? new Date().toISOString()) as string | Date,
+    updatedAt: (e.updatedAt ?? new Date().toISOString()) as string | Date,
+  })) as DocumentWithMemories['memoryEntries']
+}
+
 function normalizeDocs(raw: Record<string, unknown>[]): DocumentWithMemories[] {
-  return raw.map((doc) => ({
-    ...doc,
-    memoryEntries: (doc.memoryEntries ?? []) as DocumentWithMemories['memoryEntries'],
-    contentHash: (doc.contentHash ?? null) as string | null,
-    orgId: (doc.orgId ?? '') as string,
-    userId: (doc.userId ?? '') as string,
-    status: (doc.status ?? 'done') as DocumentWithMemories['status'],
-    createdAt: (doc.createdAt ?? new Date().toISOString()) as string,
-    updatedAt: (doc.updatedAt ?? new Date().toISOString()) as string,
-  })) as DocumentWithMemories[]
+  return raw.map((doc) => {
+    const id = (doc.id ?? '') as string
+    const rawEntries = (doc.memoryEntries ?? []) as Record<string, unknown>[]
+    return {
+      ...doc,
+      id,
+      memoryEntries: normalizeEntries(id, rawEntries),
+      contentHash: (doc.contentHash ?? null) as string | null,
+      orgId: (doc.orgId ?? '') as string,
+      userId: (doc.userId ?? '') as string,
+      status: (doc.status ?? 'done') as DocumentWithMemories['status'],
+      createdAt: (doc.createdAt ?? new Date().toISOString()) as string,
+      updatedAt: (doc.updatedAt ?? new Date().toISOString()) as string,
+    } as DocumentWithMemories
+  })
 }
 
 export default function HowItWorks({ onBack }: Props) {
