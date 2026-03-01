@@ -270,6 +270,30 @@ def _build_geo_metrics(summaries: dict[str, DatasetSummary]) -> dict:
 
     print(f"Compress [enriched]: processed docs across {len(sentiment_totals)} neighborhoods (enriched: {enriched_count})")
 
+    # Min-max normalize metrics to 0-100 for comparable heatmap rendering
+    def _minmax(values: dict[str, float]) -> dict[str, float]:
+        if not values:
+            return {}
+        lo, hi = min(values.values()), max(values.values())
+        span = hi - lo if hi > lo else 1.0
+        return {h: round((v - lo) / span * 100, 1) for h, v in values.items()}
+
+    # Collect raw values only for neighborhoods that have data (> 0)
+    raw_reg = {h: p["regulatory_density"] + p["active_permits"] for h, p in neighborhood_data.items()
+               if p["regulatory_density"] > 0 or p["active_permits"] > 0}
+    raw_biz = {h: p["business_activity"] for h, p in neighborhood_data.items() if p["business_activity"] > 0}
+    raw_sent = {h: p["avg_review_rating"] for h, p in neighborhood_data.items() if p["avg_review_rating"] > 0}
+
+    norm_reg = _minmax(raw_reg)
+    norm_biz = _minmax(raw_biz)
+    norm_sent = _minmax(raw_sent)
+
+    # Apply normalized values; None for neighborhoods with no data
+    for hood, props in neighborhood_data.items():
+        props["norm_regulatory"] = norm_reg.get(hood)
+        props["norm_business"] = norm_biz.get(hood)
+        props["norm_sentiment"] = norm_sent.get(hood)
+
     # Build GeoJSON
     features = []
     for hood in CHICAGO_NEIGHBORHOODS:
