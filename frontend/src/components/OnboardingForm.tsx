@@ -43,26 +43,39 @@ export default function OnboardingForm({ onSubmit, onCancel, initialProfile }: P
   }
 
   return (
-    <div className="min-h-screen flex items-center justify-center p-6 bg-[#06080d]">
-      <div className="max-w-md w-full">
-        <div className="mb-12">
+    <div className="min-h-screen flex flex-col bg-[#06080d]">
+      <nav className="flex items-center justify-between px-10 py-5 bg-white/[0.03] backdrop-blur-md border-b border-white/[0.06] shrink-0">
+        <button
+          type="button"
+          onClick={() => onCancel?.()}
+          className="text-lg font-semibold tracking-tight text-white uppercase hover:text-white/80 transition-colors cursor-pointer"
+        >
+          Alethia
+        </button>
+        {onCancel && (
           <button
             type="button"
-            onClick={() => onCancel?.()}
-            className="text-xs font-mono font-medium uppercase tracking-[0.3em] text-white/30 hover:text-white/50 transition-colors cursor-pointer mb-4 block"
+            onClick={onCancel}
+            className="px-4 py-2 text-sm font-medium border border-white/20 text-white/80 hover:text-white hover:border-white/40 transition-colors cursor-pointer"
           >
-            Alethia
+            Back
           </button>
-          <h1 className="text-3xl font-bold tracking-tight text-white mb-2">
-            Configure analysis.
-          </h1>
-          <p className="text-sm text-white/40 leading-relaxed">
-            Select your business type and target neighborhood to begin.
-          </p>
-        </div>
+        )}
+      </nav>
 
-        <form onSubmit={handleSubmit} className="space-y-6">
-          <div>
+      <div className="flex-1 flex items-center justify-center p-6">
+        <div className="max-w-md w-full">
+          <div className="mb-12">
+            <h1 className="text-3xl font-bold tracking-tight text-white mb-2">
+                Configure analysis.
+            </h1>
+            <p className="text-sm text-white/40 leading-relaxed">
+              Select your business type and target neighborhood to begin.
+            </p>
+          </div>
+
+          <form onSubmit={handleSubmit} className="space-y-6">
+            <div>
             <label className="block text-xs font-mono uppercase tracking-wider text-white/30 mb-2">
               Business Type
             </label>
@@ -76,9 +89,9 @@ export default function OnboardingForm({ onSubmit, onCancel, initialProfile }: P
                 <option key={type} value={type} className="bg-[#0a0c12]">{type}</option>
               ))}
             </select>
-          </div>
+            </div>
 
-          <div>
+            <div>
             <label className="block text-xs font-mono uppercase tracking-wider text-white/30 mb-2">
               Neighborhood
             </label>
@@ -92,9 +105,9 @@ export default function OnboardingForm({ onSubmit, onCancel, initialProfile }: P
                 <option key={n} value={n} className="bg-[#0a0c12]">{n}</option>
               ))}
             </select>
-          </div>
+            </div>
 
-          <div className="pt-2 space-y-2">
+            <div className="pt-2 space-y-2">
             <button
               type="submit"
               disabled={!businessType || !neighborhood}
@@ -102,21 +115,13 @@ export default function OnboardingForm({ onSubmit, onCancel, initialProfile }: P
             >
               Run Analysis
             </button>
-            {onCancel && (
-              <button
-                type="button"
-                onClick={onCancel}
-                className="w-full border border-white/20 text-white/60 hover:text-white hover:border-white/40 font-semibold py-3.5 text-sm tracking-wide transition-colors cursor-pointer"
-              >
-                Back
-              </button>
-            )}
-          </div>
+            </div>
 
-          <p className="text-center text-[10px] font-mono text-white/15 uppercase tracking-widest pt-2">
-            9 live data sources across Chicago
-          </p>
-        </form>
+            <p className="text-center text-[10px] font-mono text-white/15 uppercase tracking-widest pt-2">
+              9 live data sources across Chicago
+            </p>
+          </form>
+        </div>
       </div>
     </div>
   )

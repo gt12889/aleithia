@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { MemoryGraph } from '@supermemory/memory-graph'
 import type { DocumentWithMemories } from '@supermemory/memory-graph'
 import { api } from '../api.ts'
@@ -41,6 +42,7 @@ function normalizeDocs(raw: Record<string, unknown>[]): DocumentWithMemories[] {
 }
 
 export default function MemoryGraphPage({ onBack }: Props) {
+  const navigate = useNavigate()
   const [documents, setDocuments] = useState<DocumentWithMemories[]>([])
   const [isLoading, setIsLoading] = useState(true)
   const [isLoadingMore, setIsLoadingMore] = useState(false)
@@ -214,8 +216,20 @@ export default function MemoryGraphPage({ onBack }: Props) {
           onSlideshowStop={() => setSlideshowActive(false)}
         >
           {!isLoading && documents.length === 0 && (
-            <div className="flex items-center justify-center h-64 text-white/40 text-sm font-mono">
-              No documents yet. Run a chat query to ingest documents into the graph.
+            <div className="flex flex-col items-center justify-center h-64 gap-4 text-center">
+              <p className="text-sm font-mono text-white/40">
+                No documents in the knowledge graph yet.
+              </p>
+              <p className="text-xs font-mono text-white/25 max-w-sm">
+                Run analysis and ask a question in the chat to ingest documents.
+              </p>
+              <button
+                type="button"
+                onClick={() => navigate('/start')}
+                className="pointer-events-auto px-6 py-2.5 text-sm font-medium bg-white text-[#06080d] hover:bg-gray-200 transition-colors cursor-pointer"
+              >
+                Get Started
+              </button>
             </div>
           )}
         </MemoryGraph>

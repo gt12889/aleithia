@@ -71,13 +71,13 @@ function App() {
         path="/"
         element={
           <LandingPage
-            onGetStarted={() => navigate('/onboarding')}
+            onGetStarted={() => navigate('/start')}
             onViewSource={() => navigate('/how-it-works')}
           />
         }
       />
       <Route
-        path="/onboarding"
+        path="/start"
         element={
           <OnboardingForm
             onSubmit={handleProfileSubmit}

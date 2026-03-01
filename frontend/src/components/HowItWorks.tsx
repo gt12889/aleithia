@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { MemoryGraph, injectStyles } from '@supermemory/memory-graph'
 import '@supermemory/memory-graph/styles.css'
 import type { DocumentWithMemories } from '@supermemory/memory-graph'
@@ -62,6 +63,7 @@ function normalizeDocs(raw: Record<string, unknown>[]): DocumentWithMemories[] {
 }
 
 export default function HowItWorks({ onBack }: Props) {
+  const navigate = useNavigate()
   // Memory graph state
   const [documents, setDocuments] = useState<DocumentWithMemories[]>([])
   const [isLoading, setIsLoading] = useState(true)
@@ -382,8 +384,16 @@ export default function HowItWorks({ onBack }: Props) {
             onSlideshowNodeChange={() => {}}
             onSlideshowStop={() => setSlideshowActive(false)}
           >
-            <div className="flex items-center justify-center h-full">
-              <p className="text-sm font-mono text-white/20">No documents yet. Run a chat query to ingest documents.</p>
+            <div className="flex flex-col items-center justify-center h-full gap-4 text-center">
+              <p className="text-sm font-mono text-white/40">No documents in the knowledge graph yet.</p>
+              <p className="text-xs font-mono text-white/25 max-w-sm">Run analysis and ask a question in the chat to ingest documents.</p>
+              <button
+                type="button"
+                onClick={() => navigate('/start')}
+                className="pointer-events-auto px-6 py-2.5 text-sm font-medium bg-white text-[#06080d] hover:bg-gray-200 transition-colors cursor-pointer"
+              >
+                Get Started
+              </button>
             </div>
           </MemoryGraph>
         </div>
@@ -393,7 +403,7 @@ export default function HowItWorks({ onBack }: Props) {
       <footer className="px-10 py-8 border-t border-white/[0.04]">
         <div className="max-w-4xl mx-auto">
           <p className="text-xs font-mono text-white/20">
-            Built at HackIllinois 2026 · Chicago Open Data / Reddit / Yelp / Legistar
+            Built at HackIllinois 2026 · Democratizing business intelligence.
           </p>
         </div>
       </footer>
