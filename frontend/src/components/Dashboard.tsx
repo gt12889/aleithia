@@ -326,6 +326,10 @@ export default function Dashboard({ profile, onReset, token, onProfileUpdate, in
               setProcessStage('synthesizing')
             }
           },
+          onMemory: (data) => {
+            setMemoryInfo(data)
+            processLogs.current.push(`[+${Date.now() - startTime}ms] memory: profile=${data.has_profile}, past=${data.past_interactions}`)
+          },
           onAgents: (data) => {
             setAgentInfo(data)
             setAgentActive(false)
@@ -733,6 +737,7 @@ export default function Dashboard({ profile, onReset, token, onProfileUpdate, in
               processStage={processStage}
               chatQuestion={chatQuestion}
               processLogs={processLogs.current}
+              memoryInfo={memoryInfo}
             />
           */}
           <LocationReportPanel
