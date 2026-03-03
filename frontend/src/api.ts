@@ -150,6 +150,9 @@ export async function streamChat(
       }
     }
   }
+
+  // Stream ended — ensure onDone fires even if server didn't send a "done" event
+  callbacks.onDone?.()
 }
 
 export interface DeepDiveResult {

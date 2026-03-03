@@ -589,9 +589,9 @@ export default function Dashboard({ profile, onReset, token, onProfileUpdate, in
           <button
             type="button"
             onClick={onReset}
-            className="text-sm font-semibold uppercase tracking-wide hover:opacity-80 transition-opacity cursor-pointer"
+            className="text-sm font-semibold uppercase tracking-wide text-white/70 hover:text-white transition-colors duration-300 cursor-pointer"
           >
-            <ShinyText text="Aleithia" speed={2} color="#b5b5b5" shineColor="#ffffff" spread={120} direction="left" />
+            Aleithia
           </button>
           <div className="h-3.5 w-px bg-white/10" />
           <span className="text-xs font-mono text-white/30">
