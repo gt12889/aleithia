@@ -740,7 +740,7 @@ def _load_brief_by_id(brief_id: str) -> dict | None:
         modal.Secret.from_name("alethia-secrets"),
         modal.Secret.from_name("arize-secrets"),
     ],
-    schedule=modal.Period(minutes=5),
+    # schedule=modal.Period(minutes=5),  # Disabled: Modal free tier limits to 5 cron jobs
     timeout=600,
 )
 async def scan_enriched_docs():

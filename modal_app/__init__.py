@@ -33,5 +33,7 @@ if not _os.environ.get("MODAL_IS_REMOTE"):
     from modal_app.pipelines import cctv  # noqa: F401
     from modal_app.pipelines import parking  # noqa: F401
     from modal_app import lead_analyst  # noqa: F401
-    from modal_app import vectordb  # noqa: F401
+    from modal_app.volume import vectordb_image as _vdb_img  # noqa: F401
+    if _vdb_img is not None:
+        from modal_app import vectordb  # noqa: F401
     from modal_app import graph  # noqa: F401
