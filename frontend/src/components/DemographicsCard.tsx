@@ -35,10 +35,10 @@ export default function DemographicsCard({ metrics, demographics }: Props) {
   const hasDemographics = demographics && demographics.total_population && demographics.total_population > 0
 
   const items = [
-    { label: 'Active Permits', value: metrics.active_permits || 0, fmt: (v: number) => v.toString() },
-    { label: 'Crime 30d', value: metrics.crime_incidents_30d || 0, fmt: (v: number) => v.toString() },
-    { label: 'Avg Review', value: metrics.avg_review_rating || 0, fmt: (v: number) => v > 0 ? `${v.toFixed(1)}/5` : 'N/A' },
-    { label: 'Reviews', value: metrics.review_count || 0, fmt: (v: number) => v > 0 ? v.toString() : 'N/A' },
+    { label: 'Active Permits', value: metrics.active_permits || 0, fmt: (v: number) => v > 0 ? v.toString() : '\u2014' },
+    { label: 'News Mentions', value: metrics.news_mentions || 0, fmt: (v: number) => v > 0 ? v.toString() : '\u2014' },
+    { label: 'Avg Review', value: metrics.avg_review_rating || 0, fmt: (v: number) => v > 0 ? `${v.toFixed(1)}/5` : '\u2014' },
+    { label: 'Reviews', value: metrics.review_count || 0, fmt: (v: number) => v > 0 ? v.toString() : '\u2014' },
   ]
 
   const scores = [
@@ -85,11 +85,11 @@ export default function DemographicsCard({ metrics, demographics }: Props) {
             <div className="grid grid-cols-2 gap-2">
               {[
                 { value: demographics!.total_population!.toLocaleString(), label: 'Population' },
-                { value: fmt$(demographics!.median_household_income || 0), label: 'Median Income' },
-                { value: fmt$(demographics!.median_gross_rent || 0), label: 'Median Rent' },
-                { value: `${demographics!.unemployment_rate || 0}%`, label: 'Unemployment' },
-                { value: String(demographics!.median_age || 0), label: 'Median Age' },
-                { value: `${demographics!.renter_pct || 0}%`, label: 'Renters' },
+                { value: demographics!.median_household_income ? fmt$(demographics!.median_household_income) : '\u2014', label: 'Median Income' },
+                { value: demographics!.median_gross_rent ? fmt$(demographics!.median_gross_rent) : '\u2014', label: 'Median Rent' },
+                { value: demographics!.unemployment_rate ? `${demographics!.unemployment_rate}%` : '\u2014', label: 'Unemployment' },
+                { value: demographics!.median_age ? String(demographics!.median_age) : '\u2014', label: 'Median Age' },
+                { value: demographics!.renter_pct ? `${demographics!.renter_pct}%` : '\u2014', label: 'Renters' },
               ].map((item, i) => (
                 <motion.div
                   key={item.label}

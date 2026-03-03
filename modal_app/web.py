@@ -730,7 +730,7 @@ def _compute_metrics(name: str, inspections: list, permits: list, licenses: list
         "sentiment": round(sentiment, 1),
         "risk_score": risk_score,
         "active_permits": len(permits),
-        "crime_incidents_30d": 0,
+        "news_mentions": len(news),
         "avg_review_rating": avg_review_rating,
         "review_count": len(ratings),
     }
