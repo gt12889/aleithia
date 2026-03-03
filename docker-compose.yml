@@ -1,5 +1,6 @@
 services:
   backend:
+    container_name: backend
     build: ./backend
     ports:
       - "8000:8000"
@@ -12,6 +13,7 @@ services:
       - MODAL_TOKEN_SECRET=${MODAL_TOKEN_SECRET:-}
 
   frontend:
+    container_name: frontend
     build: ./frontend
     ports:
       - "5173:5173"
