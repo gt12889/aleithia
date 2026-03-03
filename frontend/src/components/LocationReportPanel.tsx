@@ -993,7 +993,7 @@ function generatePdf(
     addFooterFinal(i, totalPages)
   }
 
-  const fileName = `aleithia-proposal-${profile.neighborhood.toLowerCase().replaceAll(' ', '-')}-${profile.business_type.toLowerCase().replaceAll(' ', '-')}.pdf`
+  const fileName = `alethia-proposal-${profile.neighborhood.toLowerCase().replaceAll(' ', '-')}-${profile.business_type.toLowerCase().replaceAll(' ', '-')}.pdf`
   doc.save(fileName)
 }
 
