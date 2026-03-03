@@ -101,6 +101,9 @@ def test_social_trends_contract_with_mixed_data(monkeypatch) -> None:
         assert trend["title"].strip()
         assert trend["detail"].strip()
     assert fake_completions.last_kwargs["model"] == "gpt-5-test"
+    assert fake_completions.last_kwargs["max_completion_tokens"] == 512
+    assert "max_tokens" not in fake_completions.last_kwargs
+    assert "temperature" not in fake_completions.last_kwargs
 
 
 def test_vision_assess_contract_model_field(monkeypatch, tmp_path: Path) -> None:
@@ -135,3 +138,6 @@ def test_vision_assess_contract_model_field(monkeypatch, tmp_path: Path) -> None
     assert payload["model"] == "gpt-5-mini-test"
     assert "assessment" in payload
     assert fake_completions.last_kwargs["model"] == "gpt-5-mini-test"
+    assert fake_completions.last_kwargs["max_completion_tokens"] == 600
+    assert "max_tokens" not in fake_completions.last_kwargs
+    assert "temperature" not in fake_completions.last_kwargs

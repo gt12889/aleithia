@@ -1901,6 +1901,11 @@ def _deterministic_social_fallback_trends(
     return trends
 
 
+def _is_gpt5_family_model(model_name: str) -> bool:
+    """GPT-5 family rejects temperature and max_tokens in chat completions."""
+    return (model_name or "").strip().lower().startswith("gpt-5")
+
+
 def _parse_social_trends_response(raw: str) -> list[dict]:
     """Parse and normalize LLM output into the existing trends contract."""
     text = (raw or "").strip()
@@ -2030,12 +2035,16 @@ async def social_trends(neighborhood: str, business_type: str = ""):
         if openai_available():
             try:
                 client = get_openai_client()
-                oai_resp = await client.chat.completions.create(
-                    model=get_social_trends_model(),
-                    messages=msgs,
-                    max_tokens=512,
-                    temperature=0.2,
-                )
+                social_model = get_social_trends_model()
+                create_kwargs = {
+                    "model": social_model,
+                    "messages": msgs,
+                    "max_completion_tokens": 512,
+                }
+                if not _is_gpt5_family_model(social_model):
+                    create_kwargs["temperature"] = 0.2
+
+                oai_resp = await client.chat.completions.create(**create_kwargs)
                 raw = oai_resp.choices[0].message.content or ""
             except Exception as e:
                 if not ENABLE_ALETHIA_LLM:
@@ -2683,9 +2692,9 @@ async def vision_assess(neighborhood: str):
 
     model_name = get_vision_assess_model()
     try:
-        resp = await client.chat.completions.create(
-            model=model_name,
-            messages=[
+        create_kwargs = {
+            "model": model_name,
+            "messages": [
                 {
                     "role": "system",
                     "content": (
@@ -2705,10 +2714,13 @@ async def vision_assess(neighborhood: str):
                     ],
                 },
             ],
-            max_tokens=600,
-            temperature=0.3,
-            response_format={"type": "json_object"},
-        )
+            "max_completion_tokens": 600,
+            "response_format": {"type": "json_object"},
+        }
+        if not _is_gpt5_family_model(model_name):
+            create_kwargs["temperature"] = 0.3
+
+        resp = await client.chat.completions.create(**create_kwargs)
 
         assessment = json.loads(resp.choices[0].message.content or "{}")
         return {
