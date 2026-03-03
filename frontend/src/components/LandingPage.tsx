@@ -190,8 +190,11 @@ export default function LandingPage({ onGetStarted, onViewSource, onViewWhyUs }:
                   className="w-full justify-center"
                 />
               </h1>
-              <p className="text-base sm:text-lg text-white/50 mb-12 max-w-xl mx-auto leading-relaxed">
+              <p className="text-base sm:text-lg text-white/50 mb-3 max-w-xl mx-auto leading-relaxed">
                 Enterprise-grade intelligence for small businesses.
+              </p>
+              <p className="text-xs font-mono uppercase tracking-[0.25em] text-white/25 mb-12">
+                Intelligence in the links
               </p>
               <div className="flex items-center justify-center gap-4">
                 <button
