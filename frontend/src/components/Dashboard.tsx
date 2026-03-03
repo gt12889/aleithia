@@ -738,26 +738,30 @@ export default function Dashboard({ profile, onReset, token, onProfileUpdate, in
 
               {activeTab === 'overview' && (
                 <div className="space-y-4">
-                  {/* HUD quadrant grid: Map + Risk | Demographics */}
+                  {/* Map hero (left) + Unified Risk/Insights panel (right) */}
                   <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-                    <div className="h-[280px] min-h-0">
-                    <MapView activeNeighborhood={profile.neighborhood} />
+                    <div className="h-[600px] min-h-0">
+                      <MapView activeNeighborhood={profile.neighborhood} />
                     </div>
-                    <div className="min-h-0">
-                      {riskScore ? <RiskCard score={riskScore} /> : <div className="h-full border border-white/[0.06] bg-white/[0.01] p-6 flex items-center justify-center"><span className="text-[10px] font-mono text-white/20">Loading risk assessment</span></div>}
+
+                    <div className="min-h-0 flex flex-col border border-white/[0.06] bg-white/[0.01] overflow-x-hidden lg:max-h-[600px] lg:overflow-y-auto hide-scrollbar">
+                      {riskScore ? (
+                        <RiskCard score={riskScore} borderless />
+                      ) : (
+                        <div className="p-6 flex items-center justify-center">
+                          <span className="text-[10px] font-mono text-white/20">Loading risk assessment</span>
+                        </div>
+                      )}
+                      {neighborhoodData && (
+                        <InsightsCard data={neighborhoodData} profile={profile} onTabChange={(tab) => setActiveTab(tab as Tab)} borderless />
+                      )}
                     </div>
                   </div>
 
-                  {/* Quadrant 2: Demographics + Insights */}
-                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-                    {neighborhoodData?.metrics && (
-                      <DemographicsCard metrics={neighborhoodData.metrics} demographics={neighborhoodData.demographics} />
-                    )}
-                    {neighborhoodData && (
-                      <InsightsCard data={neighborhoodData} profile={profile} onTabChange={(tab) => setActiveTab(tab as Tab)} />
-                    )}
-                  </div>
-
+                  {/* Full-width demographics strip */}
+                  {neighborhoodData?.metrics && (
+                    <DemographicsCard metrics={neighborhoodData.metrics} demographics={neighborhoodData.demographics} horizontal />
+                  )}
                 </div>
               )}
 

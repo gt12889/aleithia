@@ -3,6 +3,7 @@ import type { RiskScore } from '../types/index.ts'
 
 interface Props {
   score: RiskScore
+  borderless?: boolean
 }
 
 const severityColors = {
@@ -23,17 +24,20 @@ function scoreBg(score: number): string {
   return 'bg-red-500'
 }
 
-export default function RiskCard({ score }: Props) {
+export default function RiskCard({ score, borderless }: Props) {
   const [expanded, setExpanded] = useState(false)
 
   const glowStyle = score.overall_score <= 3 ? '0 0 12px rgba(41, 166, 52, 0.15)' : score.overall_score <= 6 ? '0 0 12px rgba(217, 158, 11, 0.15)' : '0 0 12px rgba(219, 55, 55, 0.15)'
   return (
-    <div className="border border-white/[0.06] bg-white/[0.01] overflow-hidden" style={{ boxShadow: glowStyle }}>
+    <div
+      className={borderless ? 'overflow-hidden shrink-0' : 'border border-white/[0.06] bg-white/[0.01] overflow-hidden'}
+      style={borderless ? undefined : { boxShadow: glowStyle }}
+    >
       <button
         onClick={() => setExpanded(!expanded)}
-        className="w-full p-5 text-left hover:bg-white/[0.02] transition-colors cursor-pointer"
+        className={`w-full text-left hover:bg-white/[0.02] transition-colors cursor-pointer ${borderless ? 'px-5 py-3' : 'p-5'}`}
       >
-        <div className="flex items-center justify-between mb-4">
+        <div className={`flex items-center justify-between ${borderless ? 'mb-2' : 'mb-4'}`}>
           <div>
             <h3 className="text-sm font-semibold text-white">{score.neighborhood}</h3>
             <p className="text-[10px] font-mono uppercase tracking-wider text-white/25 mt-0.5">{score.business_type}</p>
@@ -46,7 +50,7 @@ export default function RiskCard({ score }: Props) {
           </div>
         </div>
 
-        <div className="w-full bg-white/[0.06] h-1 mb-4">
+        <div className={`w-full bg-white/[0.06] h-1 ${borderless ? 'mb-2' : 'mb-4'}`}>
           <div
             className={`h-1 ${scoreBg(score.overall_score)} transition-all`}
             style={{ width: `${score.overall_score * 10}%` }}
@@ -55,13 +59,15 @@ export default function RiskCard({ score }: Props) {
 
         <p className="text-xs text-white/35 leading-relaxed">{score.summary}</p>
 
-        <div className="flex items-center mt-4 text-[10px] font-mono text-white/20">
+        <div className={`flex items-center text-[10px] font-mono text-white/20 ${borderless ? 'mt-2' : 'mt-4'}`}>
           <span>CONF {(score.confidence * 100).toFixed(0)}%</span>
           <span className="mx-2 text-white/10">|</span>
           <span>{score.factors.length} FACTORS</span>
           <span className="ml-auto uppercase">{expanded ? 'collapse' : 'expand'}</span>
         </div>
       </button>
+
+      {borderless && !expanded && <div className="mx-5 border-b border-white/[0.06]" />}
 
       {expanded && (
         <div className="px-5 pb-5 space-y-3 border-t border-white/[0.06] pt-4">

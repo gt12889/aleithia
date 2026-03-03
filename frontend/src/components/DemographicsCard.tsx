@@ -17,6 +17,7 @@ interface Demographics {
 interface Props {
   metrics: NeighborhoodMetrics
   demographics?: Demographics | null
+  horizontal?: boolean
 }
 
 function fmt$(v: number): string {
@@ -24,7 +25,7 @@ function fmt$(v: number): string {
   return `$${v}`
 }
 
-export default function DemographicsCard({ metrics, demographics }: Props) {
+export default function DemographicsCard({ metrics, demographics, horizontal }: Props) {
   const hasDemographics = demographics && demographics.total_population && demographics.total_population > 0
 
   const items = [
@@ -39,6 +40,53 @@ export default function DemographicsCard({ metrics, demographics }: Props) {
     { label: 'Business Activity', value: metrics.business_activity || 0 },
     { label: 'Sentiment', value: metrics.sentiment || 0 },
   ]
+
+  if (horizontal) {
+    const hasDemo = demographics && demographics.total_population && demographics.total_population > 0
+    const censusItems = hasDemo ? [
+      { label: 'Population', value: demographics!.total_population!.toLocaleString() },
+      { label: 'Income', value: fmt$(demographics!.median_household_income || 0) },
+      { label: 'Rent', value: fmt$(demographics!.median_gross_rent || 0) },
+      { label: 'Age', value: `${demographics!.median_age || 0}` },
+      { label: 'Unemployment', value: `${demographics!.unemployment_rate || 0}%` },
+      { label: 'Renters', value: `${demographics!.renter_pct || 0}%` },
+    ] : []
+
+    return (
+      <div className="border border-white/[0.06] bg-white/[0.01] p-4">
+        <div className="flex items-center justify-between mb-3">
+          <h3 className="text-[10px] font-mono font-medium uppercase tracking-wider text-white/30">
+            {metrics.neighborhood} Metrics
+          </h3>
+          <div className="flex items-center gap-4">
+            {scores.map(score => (
+              <div key={score.label} className="flex items-center gap-2">
+                <span className="text-[9px] font-mono uppercase tracking-wider text-white/20">{score.label}</span>
+                <div className="w-16 bg-white/[0.04] h-1">
+                  <div className="h-1 bg-white/40 transition-all" style={{ width: `${Math.min(score.value, 100)}%` }} />
+                </div>
+                <span className="text-[10px] font-mono text-white/20">{score.value.toFixed(1)}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          {censusItems.map(ci => (
+            <div key={ci.label} className="bg-white/[0.02] border border-white/[0.04] px-3 py-2">
+              <span className="text-sm font-bold font-mono text-white">{ci.value}</span>
+              <span className="text-[9px] font-mono uppercase tracking-wider text-white/20 ml-2">{ci.label}</span>
+            </div>
+          ))}
+          {items.map(item => (
+            <div key={item.label} className="bg-white/[0.02] border border-white/[0.04] px-3 py-2">
+              <span className="text-sm font-bold font-mono text-white">{item.fmt(item.value)}</span>
+              <span className="text-[9px] font-mono uppercase tracking-wider text-white/20 ml-2">{item.label}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+    )
+  }
 
   return (
     <div className="border border-white/[0.06] bg-white/[0.01] p-5">

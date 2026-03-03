@@ -7,6 +7,7 @@ interface Props {
   data: NeighborhoodData
   profile: UserProfile
   onTabChange?: (tab: string) => void
+  borderless?: boolean
 }
 
 const CATEGORY_TAB_MAP: Record<string, string> = {
@@ -125,7 +126,7 @@ function CategoryRow({ cat, expanded, onToggle, evidence, onViewAll }: {
   )
 }
 
-export default function InsightsCard({ data, profile, onTabChange }: Props) {
+export default function InsightsCard({ data, profile, onTabChange, borderless }: Props) {
   const [riskProfile, setRiskProfile] = useState<RiskProfile>('conservative')
   const [expandedId, setExpandedId] = useState<string | null>(null)
   const [streetscape, setStreetscape] = useState<StreetscapeData | null>(null)
@@ -199,11 +200,11 @@ export default function InsightsCard({ data, profile, onTabChange }: Props) {
   if (insights.coverageCount === 0) return null
 
   return (
-    <div className="border border-white/[0.06] bg-white/[0.02]">
+    <div className={borderless ? 'shrink-0' : 'border border-white/[0.06] bg-white/[0.02]'}>
       {/* Header */}
       <div className="px-5 pt-5 pb-3 flex items-center justify-between">
         <div className="text-[10px] font-mono uppercase tracking-wider text-white/30">
-          Risk Assessment Score
+          Opportunity Assessment
         </div>
         <div className="flex gap-0 border border-white/[0.08] rounded overflow-hidden">
           {PROFILES.map(p => (
