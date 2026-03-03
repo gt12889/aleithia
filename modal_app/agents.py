@@ -593,7 +593,7 @@ async def regulatory_agent(business_type: str, trace_context: dict | None = None
                 vdb = vdb_cls()
                 query_text = f"{business_type} regulatory compliance zoning permits licenses"
                 query_embedding = vdb.embed_text.remote(query_text)
-                vectordb_docs = vdb.search_neighborhood.remote(query_embedding, "", top_k=30)
+                vectordb_docs = vdb.search.remote(query_embedding, "enriched", top_k=30)
                 if vectordb_docs:
                     report["findings"] = report.get("findings", {})
                     report["findings"]["vectordb"] = {

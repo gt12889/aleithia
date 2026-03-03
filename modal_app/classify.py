@@ -194,17 +194,20 @@ async def process_queue_batch():
         try:
             from modal_app.vectordb import vectordb_available, build_embed_text, build_payload
             if vectordb_available():
-                regulatory_docs = [d for d in docs if d.get("classification", {}).get("label", "") in ("regulatory", "legal")]
+                regulatory_docs = [
+                    d for d in docs
+                    if (d.get("classification", {}).get("labels") or [""])[0] in ("regulatory", "legal")
+                ]
                 if regulatory_docs:
                     vdb_cls = modal.Cls.from_name("alethia", "VectorDBService")
                     vdb = vdb_cls()
 
                     embed_texts = [build_embed_text(d) for d in regulatory_docs]
-                    payloads = [build_payload(d) for d in regulatory_docs]
+                    payloads = [build_payload(d, d.get("classification", {}), d.get("sentiment", {})) for d in regulatory_docs]
                     ids = [d.get("id", f"doc-{i}") for i, d in enumerate(regulatory_docs)]
 
                     embeddings = vdb.embed_batch.remote(embed_texts)
-                    vdb.upsert_batch.remote("enriched", ids, embeddings, payloads)
+                    vdb.batch_upsert_docs.remote(ids, embeddings, payloads, "enriched")
                     print(f"VectorDB: upserted {len(regulatory_docs)} regulatory docs to enriched collection")
         except Exception as e:
             print(f"VectorDB upsert failed (non-critical): {e}")

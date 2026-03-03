@@ -2,9 +2,12 @@
 
 Stores seen document IDs at /data/dedup/{source}.json.
 Follows the same persistence pattern as FallbackChain cache files.
+Uses advisory file locking (fcntl) to prevent concurrent pipeline runs
+from losing dedup entries.
 """
 from __future__ import annotations
 
+import fcntl
 import json
 from datetime import datetime, timezone
 from pathlib import Path
@@ -30,9 +33,11 @@ class SeenSet:
         self.source = source
         self.dir = Path(DEDUP_PATH)
         self.file = self.dir / f"{source}.json"
+        self._lock_file = self.dir / f"{source}.lock"
         self._list: list[str] = []
         self._set: set[str] = set()
         self._seen_at: dict[str, str] = {}
+        self._lock_fd = None
         self._load()
 
     def _load(self) -> None:
@@ -61,6 +66,19 @@ class SeenSet:
         except Exception as e:
             print(f"SeenSet [{self.source}]: load error: {e}")
         print(f"SeenSet [{self.source}]: starting empty")
+
+    def _acquire_lock(self) -> None:
+        """Acquire exclusive file lock for save operations."""
+        self.dir.mkdir(parents=True, exist_ok=True)
+        self._lock_fd = open(self._lock_file, "w")
+        fcntl.flock(self._lock_fd, fcntl.LOCK_EX)
+
+    def _release_lock(self) -> None:
+        """Release file lock."""
+        if self._lock_fd:
+            fcntl.flock(self._lock_fd, fcntl.LOCK_UN)
+            self._lock_fd.close()
+            self._lock_fd = None
 
     def contains(self, doc_id: str, max_age_hours: int | None = None) -> bool:
         """Check if a document ID has been seen before.
@@ -99,15 +117,53 @@ class SeenSet:
             self._set.add(doc_id)
 
     def save(self) -> None:
-        """Persist the set to Volume. Caps at MAX_IDS, dropping oldest."""
+        """Persist the set to Volume under exclusive file lock.
+
+        Lock → reload from disk (merge any IDs added by concurrent runs) →
+        merge in-memory additions → write → unlock.
+        """
         try:
-            if len(self._list) > MAX_IDS:
-                self._list = self._list[-MAX_IDS:]
-                self._set = set(self._list)
-            self._seen_at = {doc_id: self._seen_at.get(doc_id, "") for doc_id in self._list}
-            self.dir.mkdir(parents=True, exist_ok=True)
-            payload = {"ids": self._list, "seen_at": self._seen_at}
-            self.file.write_text(json.dumps(payload))
-            print(f"SeenSet [{self.source}]: saved {len(self._list)} IDs")
+            self._acquire_lock()
+            try:
+                # Reload from disk under lock to merge concurrent additions
+                disk_ids: list[str] = []
+                disk_seen_at: dict[str, str] = {}
+                if self.file.exists():
+                    data = json.loads(self.file.read_text())
+                    if isinstance(data, list):
+                        disk_ids = data
+                    elif isinstance(data, dict):
+                        disk_ids = data.get("ids", [])
+                        disk_seen_at = data.get("seen_at", {})
+
+                # Merge: disk IDs first, then our in-memory IDs (preserves order)
+                merged_set = set(disk_ids)
+                merged_list = list(disk_ids)
+                merged_seen_at = dict(disk_seen_at)
+                for doc_id in self._list:
+                    if doc_id not in merged_set:
+                        merged_list.append(doc_id)
+                        merged_set.add(doc_id)
+                    # Always take our timestamp (more recent)
+                    if doc_id in self._seen_at:
+                        merged_seen_at[doc_id] = self._seen_at[doc_id]
+
+                # Cap at MAX_IDS, dropping oldest
+                if len(merged_list) > MAX_IDS:
+                    merged_list = merged_list[-MAX_IDS:]
+                    merged_set = set(merged_list)
+                merged_seen_at = {k: merged_seen_at.get(k, "") for k in merged_list}
+
+                self.dir.mkdir(parents=True, exist_ok=True)
+                payload = {"ids": merged_list, "seen_at": merged_seen_at}
+                self.file.write_text(json.dumps(payload))
+
+                # Update in-memory state to match
+                self._list = merged_list
+                self._set = merged_set
+                self._seen_at = merged_seen_at
+                print(f"SeenSet [{self.source}]: saved {len(self._list)} IDs")
+            finally:
+                self._release_lock()
         except Exception as e:
             print(f"SeenSet [{self.source}]: save error: {e}")

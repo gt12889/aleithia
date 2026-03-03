@@ -114,7 +114,8 @@ WORKER_DATA_SOURCES = {
 # Dedup helpers (lightweight, JSON-backed)
 # ---------------------------------------------------------------------------
 
-def _load_analyzed_ids() -> set[str]:
+def _load_analyzed_ids(lock_fd=None) -> set[str]:
+    """Load analyzed doc IDs. If lock_fd provided, caller holds the lock."""
     path = Path(DEDUP_PATH) / "impact_analyzed.json"
     try:
         if path.exists():
@@ -125,7 +126,8 @@ def _load_analyzed_ids() -> set[str]:
     return set()
 
 
-def _save_analyzed_ids(ids: set[str]) -> None:
+def _save_analyzed_ids(ids: set[str], lock_fd=None) -> None:
+    """Save analyzed doc IDs. If lock_fd provided, caller holds the lock."""
     path = Path(DEDUP_PATH) / "impact_analyzed.json"
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -135,6 +137,22 @@ def _save_analyzed_ids(ids: set[str]) -> None:
         path.write_text(json.dumps({"ids": id_list}))
     except Exception as e:
         print(f"Lead Analyst: dedup save error: {e}")
+
+
+def _with_analyzed_lock(fn):
+    """Run fn(analyzed_ids) under an exclusive file lock, then save."""
+    import fcntl
+    lock_path = Path(DEDUP_PATH) / "impact_analyzed.lock"
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(lock_path, "w") as lock_fd:
+        fcntl.flock(lock_fd, fcntl.LOCK_EX)
+        try:
+            ids = _load_analyzed_ids(lock_fd)
+            result = fn(ids)
+            _save_analyzed_ids(ids, lock_fd)
+            return result
+        finally:
+            fcntl.flock(lock_fd, fcntl.LOCK_UN)
 
 
 # ---------------------------------------------------------------------------
@@ -459,7 +477,7 @@ async def _run_worker(
                 if sandbox_span_ctx:
                     sandbox_span_ctx.__exit__(None, None, None)
 
-        # Fallback: in-process exec with restricted globals
+        # Fallback: in-process exec with restricted builtins (no file/import/eval access)
         if not findings:
             try:
                 import tempfile
@@ -472,7 +490,27 @@ async def _run_worker(
                     patched_code = code.replace("/data/input.json", str(data_dir / "input.json"))
                     patched_code = patched_code.replace("/data/output.json", str(data_dir / "output.json"))
 
-                    exec_globals = {"__builtins__": __builtins__}
+                    # Restricted builtins: only safe operations, no file/import/eval/exec
+                    _safe_builtins = {
+                        k: getattr(__builtins__, k) if hasattr(__builtins__, k) else __builtins__[k]
+                        for k in (
+                            "abs", "all", "any", "bool", "dict", "enumerate", "filter",
+                            "float", "frozenset", "int", "isinstance", "issubclass",
+                            "len", "list", "map", "max", "min", "print", "range",
+                            "repr", "reversed", "round", "set", "slice", "sorted",
+                            "str", "sum", "tuple", "type", "zip", "True", "False", "None",
+                            "ValueError", "TypeError", "KeyError", "IndexError", "Exception",
+                        )
+                        if (hasattr(__builtins__, k) if isinstance(__builtins__, type) else k in __builtins__)
+                    }
+                    import math as _math, statistics as _statistics, collections as _collections
+                    exec_globals = {
+                        "__builtins__": _safe_builtins,
+                        "json": json,
+                        "math": _math,
+                        "statistics": _statistics,
+                        "collections": _collections,
+                    }
                     exec(patched_code, exec_globals)
 
                     output_file = data_dir / "output.json"
@@ -777,9 +815,17 @@ async def scan_enriched_docs():
         if span:
             span.set_attribute("scan.queue_docs", len(docs))
 
-        # Dedup: skip already-analyzed docs
-        analyzed_ids = _load_analyzed_ids()
-        new_docs = [d for d in docs if d.get("id", "") not in analyzed_ids]
+        # Dedup: skip already-analyzed docs (locked read to claim IDs atomically)
+        def _claim_new(analyzed_ids: set[str]) -> list[dict]:
+            new = [d for d in docs if d.get("id", "") not in analyzed_ids]
+            # Claim IDs immediately so concurrent runs skip them
+            for d in new:
+                doc_id = d.get("id", "")
+                if doc_id:
+                    analyzed_ids.add(doc_id)
+            return new
+
+        new_docs = _with_analyzed_lock(_claim_new)
         if not new_docs:
             print(f"Lead Analyst: all {len(docs)} docs already analyzed")
             return 0
@@ -794,12 +840,6 @@ async def scan_enriched_docs():
             span.set_attribute("scan.fast_filter_passed", len(candidates))
 
         if not candidates:
-            # Mark as analyzed even if not candidates
-            for d in new_docs:
-                doc_id = d.get("id", "")
-                if doc_id:
-                    analyzed_ids.add(doc_id)
-            _save_analyzed_ids(analyzed_ids)
             await volume.commit.aio()
             return 0
 
@@ -821,13 +861,6 @@ async def scan_enriched_docs():
                 briefs_created += 1
             except Exception as e:
                 print(f"Lead Analyst: dispatch failed for {doc.get('id', '?')}: {e}")
-
-        # Update dedup
-        for d in new_docs:
-            doc_id = d.get("id", "")
-            if doc_id:
-                analyzed_ids.add(doc_id)
-        _save_analyzed_ids(analyzed_ids)
 
         await volume.commit.aio()
         print(f"Lead Analyst: created {briefs_created} impact briefs")
