@@ -663,9 +663,14 @@ export default function LandingPage({ onGetStarted, onViewSource, onViewWhyUs }:
       {/* ── Memory Graph ── */}
       <section className="relative border-t border-white/[0.04]">
         <div className="px-10 py-16 max-w-7xl mx-auto text-left">
-          <h2 className="text-3xl sm:text-4xl font-bold tracking-tight text-white mb-2">
-            Memory Graph
-          </h2>
+          <div className="flex items-center gap-4 mb-2">
+            <h2 className="text-3xl sm:text-4xl font-bold tracking-tight text-white">
+              Memory Graph
+            </h2>
+            <span className="text-sm font-mono text-white/40 italic">
+              Intelligence in the links.
+            </span>
+          </div>
           <p className="text-sm text-white/50 mb-8 max-w-xl">
             Documents connected by semantic similarity, powered by Actian VectorAI DB with HNSW-indexed 384-dim embeddings for sub-15ms retrieval.
           </p>
