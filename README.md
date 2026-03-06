@@ -20,6 +20,10 @@ Aleithia is an intelligent platform that:
 
 The backend architecture leverages **Modal’s** asynchronous job functionalities. A swarm of jobs fetches news across relevant sources in Python, scheduled periodically, while distributed AI inference parses this data into detailed assessments in seconds.
 
+
+<img width="1426" height="964" alt="hacillinois_figma" src="https://github.com/user-attachments/assets/b08bb972-5c6b-4e2e-b27f-a5bc1bc564ca" />
+
+
 ### ⚡ Modal — Elastic Serverless Compute
 The backbone of Aleithia consists of **33 serverless functions** leveraging 21 distinct Modal features:
 
