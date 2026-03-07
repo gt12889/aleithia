@@ -11,10 +11,11 @@ from pathlib import Path
 import modal
 
 from modal_app.costs import track_cost
+from modal_app.runtime import get_impact_queue, get_modal_cls, get_raw_doc_queue
 from modal_app.volume import app, volume, classify_image, VOLUME_MOUNT, PROCESSED_DATA_PATH
 
 # Event bus: pipelines push raw docs, classifier drains and enriches
-doc_queue = modal.Queue.from_name("new-docs", create_if_missing=True)
+doc_queue = get_raw_doc_queue()
 
 
 @app.cls(gpu="T4", image=classify_image, scaledown_window=120, secrets=[modal.Secret.from_name("arize-secrets")], enable_memory_snapshot=True, experimental_options={"enable_gpu_snapshot": True})
@@ -205,7 +206,7 @@ async def process_queue_batch():
                     if (d.get("classification", {}).get("labels") or [""])[0] in ("regulatory", "legal")
                 ]
                 if regulatory_docs:
-                    vdb_cls = modal.Cls.from_name("alethia", "VectorDBService")
+                    vdb_cls = get_modal_cls("VectorDBService")
                     vdb = vdb_cls()
 
                     embed_texts = [build_embed_text(d) for d in regulatory_docs]
@@ -220,7 +221,7 @@ async def process_queue_batch():
 
         # Push high-confidence docs to impact queue for Lead Analyst
         try:
-            impact_queue = modal.Queue.from_name("impact-docs", create_if_missing=True)
+            impact_queue = get_impact_queue()
             for doc in docs:
                 top_score = doc.get("classification", {}).get("scores", [0])
                 if isinstance(top_score, list) and top_score and top_score[0] > 0.5:

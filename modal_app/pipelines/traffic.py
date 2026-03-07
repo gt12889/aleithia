@@ -24,6 +24,7 @@ from modal_app.common import (
 )
 from modal_app.costs import track_cost
 from modal_app.fallback import FallbackChain
+from modal_app.runtime import get_raw_doc_queue
 from modal_app.volume import app, volume, base_image, RAW_DATA_PATH, PROCESSED_DATA_PATH
 
 
@@ -299,7 +300,7 @@ async def traffic_ingester():
 
     # Push new traffic docs to classification queue for downstream enrichment.
     try:
-        doc_queue = modal.Queue.from_name("alethia-doc-queue", create_if_missing=True)
+        doc_queue = get_raw_doc_queue()
         doc_dicts = [doc.model_dump(mode="json") for doc in documents]
         await safe_queue_push(doc_queue, doc_dicts, "traffic")
     except Exception as e:

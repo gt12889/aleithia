@@ -8,6 +8,7 @@ All operations degrade gracefully via vectordb_available().
 """
 import os
 
+from modal_app.runtime import get_modal_cls
 
 # ---------------------------------------------------------------------------
 # Availability guard (same pattern as openai_utils.py)
@@ -62,10 +63,21 @@ def check_vectordb_health() -> dict:
     try:
         if not vectordb_available():
             return {"status": "not_configured"}
-        import modal as _modal
-        vdb_cls = _modal.Cls.from_name("alethia", "VectorDBService")
+        vdb_cls = get_modal_cls("VectorDBService")
         vdb = vdb_cls()
         return vdb.health_check.remote()
+    except Exception as e:
+        return {"status": "unavailable", "error": str(e)}
+
+
+async def check_vectordb_health_async() -> dict:
+    """Async health probe for use inside async endpoints."""
+    try:
+        if not vectordb_available():
+            return {"status": "not_configured"}
+        vdb_cls = get_modal_cls("VectorDBService")
+        vdb = vdb_cls()
+        return await vdb.health_check.remote.aio()
     except Exception as e:
         return {"status": "unavailable", "error": str(e)}
 
@@ -285,7 +297,7 @@ if vectordb_image is not None:
         json_files = list(enriched_dir.rglob("*.json"))
         print(f"Backfill: found {len(json_files)} enriched documents")
 
-        vdb_cls = modal.Cls.from_name("alethia", "VectorDBService")
+        vdb_cls = get_modal_cls("VectorDBService")
         vdb = vdb_cls()
         batch_size = 32
         total_upserted = 0

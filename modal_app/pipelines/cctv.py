@@ -28,6 +28,7 @@ from modal_app.common import (
 )
 from modal_app.costs import track_cost
 from modal_app.fallback import FallbackChain
+from modal_app.runtime import get_raw_doc_queue
 from modal_app.volume import app, volume, base_image, yolo_image, RAW_DATA_PATH, PROCESSED_DATA_PATH
 
 # IDOT Gateway Traffic Cameras — ArcGIS Online (public, no key needed)
@@ -674,7 +675,7 @@ async def analyze_cctv_batch():
 
     # Push to classification queue
     try:
-        doc_queue = modal.Queue.from_name("alethia-doc-queue", create_if_missing=True)
+        doc_queue = get_raw_doc_queue()
         doc_dicts = [d.model_dump(mode="json") for d in documents]
         await safe_queue_push(doc_queue, doc_dicts, "cctv")
     except Exception as e:

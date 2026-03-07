@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 
 import modal
 
+from modal_app.runtime import get_modal_cls, get_modal_function
 from modal_app.volume import app, volume, base_image, RAW_DATA_PATH
 
 DEMO_NEIGHBORHOODS = [
@@ -74,7 +75,7 @@ async def scaling_demo(num_agents: int = 15, num_queries: int = 5, run_classify:
         print(f"Phase 1: Spawning {len(neighborhoods)} neighborhood agents in parallel...")
         t0 = time.time()
 
-        intel_fn = modal.Function.from_name("alethia", "neighborhood_intel_agent")
+        intel_fn = get_modal_function("neighborhood_intel_agent")
         agent_handles = []
         for nb in neighborhoods:
             biz = DEMO_BUSINESS_TYPES[hash(nb) % len(DEMO_BUSINESS_TYPES)]
@@ -103,7 +104,7 @@ async def scaling_demo(num_agents: int = 15, num_queries: int = 5, run_classify:
         print(f"Phase 2: Running {num_queries} full orchestrated queries...")
         t1 = time.time()
 
-        orchestrate_fn = modal.Function.from_name("alethia", "orchestrate_query")
+        orchestrate_fn = get_modal_function("orchestrate_query")
         query_handles = []
         for i in range(min(num_queries, len(DEMO_QUESTIONS))):
             nb = neighborhoods[i % len(neighborhoods)]
@@ -142,8 +143,8 @@ async def scaling_demo(num_agents: int = 15, num_queries: int = 5, run_classify:
             print("Phase 3: Running batch classification burst...")
             t2 = time.time()
 
-            classifier = modal.Cls.from_name("alethia", "DocClassifier")()
-            analyzer = modal.Cls.from_name("alethia", "SentimentAnalyzer")()
+            classifier = get_modal_cls("DocClassifier")()
+            analyzer = get_modal_cls("SentimentAnalyzer")()
 
             sample_texts = [
                 f"New {biz} opening in {nb} faces zoning challenges"

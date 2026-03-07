@@ -18,10 +18,11 @@ import modal
 from pydantic import BaseModel, Field
 
 from modal_app.costs import track_cost
+from modal_app.runtime import get_impact_queue
 from modal_app.volume import app, volume, lead_analyst_image, VOLUME_MOUNT, RAW_DATA_PATH, PROCESSED_DATA_PATH
 
 # Queue: classify.py pushes high-confidence docs here after enrichment
-impact_queue = modal.Queue.from_name("impact-docs", create_if_missing=True)
+impact_queue = get_impact_queue()
 
 IMPACT_BRIEFS_PATH = f"{PROCESSED_DATA_PATH}/impact_briefs"
 DEDUP_PATH = f"{VOLUME_MOUNT}/dedup"

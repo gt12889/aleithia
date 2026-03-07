@@ -26,6 +26,7 @@ from modal_app.common import (
     safe_volume_commit,
 )
 from modal_app.costs import track_cost
+from modal_app.runtime import get_raw_doc_queue
 from modal_app.volume import app, volume, base_image, parking_image, RAW_DATA_PATH, PROCESSED_DATA_PATH
 
 
@@ -545,7 +546,7 @@ async def analyze_parking_batch(neighborhoods: list[str] | None = None):
     # Push to classification queue
     if documents:
         try:
-            doc_queue = modal.Queue.from_name("alethia-doc-queue", create_if_missing=True)
+            doc_queue = get_raw_doc_queue()
             doc_dicts = [d.model_dump(mode="json") for d in documents]
             await safe_queue_push(doc_queue, doc_dicts, "parking")
         except Exception as e:

@@ -24,6 +24,7 @@ from modal_app.pipelines.reddit import (
     reddit_docs_are_weak,
     search_reddit_fallback_runtime,
 )
+from modal_app.runtime import get_modal_cls, get_modal_function
 from modal_app.volume import app, volume, base_image, RAW_DATA_PATH, PROCESSED_DATA_PATH
 
 ADJACENT_NEIGHBORHOODS = {
@@ -262,7 +263,7 @@ async def neighborhood_intel_agent(neighborhood: str, business_type: str, focus_
                     )
                     if fallback_docs:
                         try:
-                            persist_fn = modal.Function.from_name("alethia", "persist_reddit_fallback_batch")
+                            persist_fn = get_modal_function("persist_reddit_fallback_batch")
                             await persist_fn.spawn.aio(docs=fallback_docs)
                         except Exception as exc:
                             print(f"Reddit fallback persist spawn failed (agent): {exc}")
@@ -592,7 +593,7 @@ async def regulatory_agent(business_type: str, trace_context: dict | None = None
         try:
             from modal_app.vectordb import vectordb_available
             if vectordb_available():
-                vdb_cls = modal.Cls.from_name("alethia", "VectorDBService")
+                vdb_cls = get_modal_cls("VectorDBService")
                 vdb = vdb_cls()
                 query_text = f"{business_type} regulatory compliance zoning permits licenses"
                 query_embedding = vdb.embed_text.remote(query_text)
