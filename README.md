@@ -18,7 +18,7 @@ Aleithia is an intelligent platform that:
 
 ## 🏗️ Architecture Overview
 
-The backend architecture leverages **Modal’s** asynchronous job functionalities. A swarm of jobs fetches news across relevant sources in Python, scheduled periodically, while distributed AI inference parses this data into detailed assessments in seconds.
+The backend architecture leverages **Modal’s** asynchronous job functionalities. A swarm of jobs fetches news across relevant sources in Python, scheduled periodically, while distributed AI inference parses this data into detailed assessments in seconds. The deployed API is now organized into modular route and service packages under `modal_app/api/`.
 
 
 <img width="1426" height="964" alt="hacillinois_figma" src="https://github.com/user-attachments/assets/b08bb972-5c6b-4e2e-b27f-a5bc1bc564ca" />
@@ -31,6 +31,7 @@ The backbone of Aleithia consists of **33 serverless functions** leveraging 21 d
     * `<3s cold starts` via `@modal.enter(snap=True)` memory snapshots.
     * `bart-large-mnli` + `roberta` classifiers on **T4 GPUs** using `@modal.batched` (10x cost efficiency).
 * **Computer Vision:** `YOLOv8n` (CCTV) and `SegFormer-b5` + `YOLOv8m` (Satellite parking) on T4 instances.
+* **Regulatory Retrieval:** Live Legistar and Federal Register lookups are deduplicated against cached volume data, with cache fallback when upstream sources fail.
 * **Event Bus:** `modal.Queue` decouples CPU-bound ingestion from GPU enrichment.
 * **Recursive Agents:** Lead Analyst scores docs; high-impact events (7+/10) trigger `.spawn()` fan-out to 4 parallel worker agents.
 * **Self-Healing:** `modal.Period` reconciler checks health metrics every 5 min.
@@ -44,7 +45,7 @@ Replaces the traditional Postgres + Pinecone + Redis stack with a single Graph-R
 ### 🛠️ The Tech Stack
 | Component | Technology | Role |
 | :--- | :--- | :--- |
-| **Vector DB** | Actian VectorAI | HNSW-indexed 384-dim embeddings for sub-15ms retrieval. |
+| **API Layer** | FastAPI on Modal | Modular route/service packages power analysis, status, graph, and vision endpoints. |
 | **Tracing** | OpenTelemetry | W3C trace context propagation across all Modal containers. |
 | **Sandbox** | E2B | Isolated cloud sandboxes for untrusted agent analysis code. |
 | **Hybrid LLM** | OpenAI GPT-4o | Specialized for Deep Dives, Python script generation, and Vision. |
