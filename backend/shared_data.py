@@ -6,7 +6,9 @@ import json
 import logging
 import os
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any, Iterable
 
 logger = logging.getLogger(__name__)
 
@@ -68,6 +70,59 @@ def get_processed_data_dir() -> Path:
     return get_shared_data_paths().processed_dir
 
 
+def _safe_mtime(path: Path) -> float:
+    try:
+        return path.stat().st_mtime
+    except OSError:
+        return 0.0
+
+
+def load_json_file(path: Path, default: Any = None) -> Any:
+    if not path.exists():
+        return default
+    try:
+        return json.loads(path.read_text())
+    except (json.JSONDecodeError, OSError):
+        return default
+
+
+def load_processed_json(*parts: str, default: Any = None) -> Any:
+    return load_json_file(get_processed_data_dir().joinpath(*parts), default=default)
+
+
+def load_processed_json_directory(
+    *parts: str,
+    stem_suffix_to_strip: str = "",
+) -> dict[str, Any]:
+    directory = get_processed_data_dir().joinpath(*parts)
+    if not directory.exists():
+        return {}
+
+    loaded: dict[str, Any] = {}
+    for path in sorted(directory.iterdir()):
+        if not path.is_file() or path.suffix != ".json":
+            continue
+        parsed = load_json_file(path, default=None)
+        if parsed is None:
+            continue
+        key = path.stem
+        if stem_suffix_to_strip:
+            key = key.removesuffix(stem_suffix_to_strip)
+        loaded[key] = parsed
+    return loaded
+
+
+def find_latest_processed_json_file(*parts: str, pattern: str = "*.json") -> Path | None:
+    directory = get_processed_data_dir().joinpath(*parts)
+    if not directory.exists():
+        return None
+
+    candidates = [path for path in directory.glob(pattern) if path.is_file()]
+    if not candidates:
+        return None
+    return max(candidates, key=lambda path: (_safe_mtime(path), path.name))
+
+
 def iter_raw_json_files(source: str) -> list[Path]:
     source_dir = get_raw_data_dir() / source
     if not source_dir.exists():
@@ -78,10 +133,7 @@ def iter_raw_json_files(source: str) -> list[Path]:
             rel_parent = str(path.relative_to(source_dir).parent)
         except ValueError:
             rel_parent = str(path.parent)
-        try:
-            mtime = path.stat().st_mtime
-        except OSError:
-            mtime = 0.0
+        mtime = _safe_mtime(path)
         return (rel_parent, mtime)
 
     return sorted(
@@ -98,13 +150,27 @@ def count_raw_json_files(source: str) -> int:
 def load_raw_docs(source: str, limit: int | None = None) -> list[dict]:
     docs: list[dict] = []
     for json_file in iter_raw_json_files(source):
-        try:
-            parsed = json.loads(json_file.read_text())
-        except (json.JSONDecodeError, OSError):
-            continue
+        parsed = load_json_file(json_file, default=None)
         if not isinstance(parsed, dict):
             continue
         docs.append(parsed)
         if limit is not None and len(docs) >= limit:
             break
     return docs
+
+
+def get_raw_source_stats(sources: Iterable[str]) -> dict[str, dict[str, object]]:
+    stats: dict[str, dict[str, object]] = {}
+    for source in sources:
+        json_files = iter_raw_json_files(source)
+        latest = max(json_files, key=_safe_mtime, default=None)
+        stats[source] = {
+            "doc_count": len(json_files),
+            "active": bool(json_files),
+            "last_update": (
+                datetime.fromtimestamp(_safe_mtime(latest), tz=timezone.utc).isoformat()
+                if latest is not None
+                else None
+            ),
+        }
+    return stats
