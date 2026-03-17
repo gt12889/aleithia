@@ -1,6 +1,5 @@
 """Routes that serve Aleithia data from shared raw/processed JSON files."""
 
-import json
 import os
 from typing import Optional
 
@@ -11,7 +10,17 @@ from pydantic import BaseModel, ConfigDict, Field
 from database import get_db
 from models import UserProfile, QueryResult
 from auth import extract_user_id
-from shared_data import count_raw_json_files, get_processed_data_dir, load_raw_docs
+from read_helpers import (
+    filter_docs_by_neighborhood,
+    filter_public_data_by_dataset,
+    transform_doc_for_graph,
+)
+from shared_data import (
+    get_raw_source_stats,
+    load_processed_json,
+    load_processed_json_directory,
+    load_raw_docs,
+)
 
 router = APIRouter()
 
@@ -50,48 +59,6 @@ class UserQueryResponse(BaseModel):
 def _load_all(source: str) -> list[dict]:
     """Load all valid JSON documents from a raw source directory."""
     return load_raw_docs(source)
-
-
-def _load_processed_json(*parts: str, default):
-    path = get_processed_data_dir().joinpath(*parts)
-    if not path.exists():
-        return default
-    try:
-        return json.loads(path.read_text())
-    except (json.JSONDecodeError, OSError):
-        return default
-
-
-def _load_synthetic_cctv() -> dict:
-    return _load_processed_json("cctv", "synthetic_analytics.json", default={})
-
-
-def _filter_by_neighborhood(docs: list[dict], neighborhood: str) -> list[dict]:
-    """Filter documents that match a neighborhood (case-insensitive).
-    Checks geo fields, content, metadata, and address info."""
-    nb = neighborhood.lower()
-    results = []
-    for doc in docs:
-        geo = doc.get("geo", {})
-        doc_nb = (geo.get("neighborhood") or "").lower()
-        doc_ca = (geo.get("community_area_name") or "").lower()
-        content = (doc.get("content") or "").lower()
-        # Also check raw_record for address fields
-        raw = doc.get("metadata", {}).get("raw_record", {})
-        address = (raw.get("address") or "").lower()
-        title = (doc.get("title") or "").lower()
-        community = (raw.get("community_area_name") or "").lower()
-        if nb in doc_nb or nb in doc_ca or nb in content or nb in address or nb in title or nb in community:
-            results.append(doc)
-    return results
-
-
-def _filter_by_type(docs: list[dict], dataset: str) -> list[dict]:
-    """Filter public_data docs by dataset type (e.g. food_inspections)."""
-    return [
-        d for d in docs
-        if d.get("metadata", {}).get("dataset") == dataset
-    ]
 
 
 @router.get("/user/profile", response_model=UserProfileResponse)
@@ -224,76 +191,27 @@ async def put_user_settings(
 @router.get("/sources")
 async def get_sources():
     """Return available data sources with counts."""
-    sources = {}
-    for name in ["public_data", "demographics", "politics", "news", "realestate", "reddit", "reviews"]:
-        count = count_raw_json_files(name)
-        sources[name] = {"count": count, "active": count > 0}
-
-    return sources
+    source_stats = get_raw_source_stats(
+        ["public_data", "demographics", "politics", "news", "realestate", "reddit", "reviews"]
+    )
+    return {
+        source: {"count": data["doc_count"], "active": data["active"]}
+        for source, data in source_stats.items()
+    }
 
 
 @router.get("/geo")
 async def get_geo():
     """Return GeoJSON FeatureCollection for map visualization."""
-    return _load_processed_json("geo", "neighborhood_metrics.json", default={"type": "FeatureCollection", "features": []})
+    return load_processed_json(
+        "geo",
+        "neighborhood_metrics.json",
+        default={"type": "FeatureCollection", "features": []},
+    )
 
 
 def _empty_graph_response():
     return {"documents": [], "pagination": {"currentPage": 1, "totalPages": 0}}
-
-
-def _transform_doc_for_graph(doc: dict) -> dict:
-    """Transform Supermemory API doc to DocumentWithMemories format. Preserves all fields for graph viz."""
-    memories = doc.get("memories", doc.get("memoryEntries", []))
-    memory_entries = []
-    for m in memories:
-        rels = m.get("memoryRelations")
-        if isinstance(rels, dict):
-            rels = [{"targetMemoryId": k, "relationType": v} for k, v in rels.items() if v in ("updates", "extends", "derives")]
-        entry = {
-            "id": m.get("id", ""),
-            "documentId": doc.get("id", ""),
-            "content": m.get("memory", m.get("content")),
-            "summary": m.get("summary"),
-            "title": m.get("title"),
-            "createdAt": m.get("createdAt", m.get("created_at")),
-            "updatedAt": m.get("updatedAt", m.get("updated_at")),
-            "isLatest": m.get("isLatest", True),
-            "isForgotten": m.get("isForgotten"),
-            "forgetAfter": m.get("forgetAfter"),
-            "relation": m.get("relation") or m.get("changeType"),
-            "memoryRelations": rels if isinstance(rels, list) else m.get("memoryRelations"),
-            "updatesMemoryId": m.get("updatesMemoryId"),
-            "nextVersionId": m.get("nextVersionId"),
-            "parentMemoryId": m.get("parentMemoryId"),
-            "rootMemoryId": m.get("rootMemoryId"),
-            "metadata": m.get("metadata"),
-            "spaceId": m.get("spaceId"),
-            "spaceContainerTag": m.get("spaceContainerTag"),
-        }
-        memory_entries.append(entry)
-    out = {
-        "id": doc.get("id", ""),
-        "customId": doc.get("customId"),
-        "title": doc.get("title"),
-        "content": doc.get("content"),
-        "summary": doc.get("summary"),
-        "url": doc.get("url"),
-        "source": doc.get("source"),
-        "type": doc.get("type", doc.get("documentType")),
-        "status": doc.get("status", "done"),
-        "metadata": doc.get("metadata"),
-        "createdAt": doc.get("createdAt", doc.get("created_at")),
-        "updatedAt": doc.get("updatedAt", doc.get("updated_at")),
-        "memoryEntries": memory_entries,
-    }
-    if doc.get("x") is not None:
-        out["x"] = doc["x"]
-    if doc.get("y") is not None:
-        out["y"] = doc["y"]
-    if doc.get("summaryEmbedding") is not None:
-        out["summaryEmbedding"] = doc["summaryEmbedding"]
-    return out
 
 
 @router.get("/graph")
@@ -331,7 +249,7 @@ async def get_graph(page: int = Query(1, ge=1), limit: int = Query(500, ge=1, le
             if resp.status_code == 200:
                 data = resp.json()
                 raw_docs = data.get("documents", [])
-                docs = [_transform_doc_for_graph(d) for d in raw_docs]
+                docs = [transform_doc_for_graph(d) for d in raw_docs]
                 total = data.get("totalCount", len(docs))
                 print(f"[graph] SUCCESS viewport: {len(docs)} docs, totalCount={total}")
                 return {
@@ -357,7 +275,7 @@ async def get_graph(page: int = Query(1, ge=1), limit: int = Query(500, ge=1, le
                 resp.raise_for_status()
                 data = resp.json()
                 raw_docs = data.get("documents") or data.get("memories") or []
-                docs = [_transform_doc_for_graph(d) for d in raw_docs]
+                docs = [transform_doc_for_graph(d) for d in raw_docs]
                 pagination = data.get("pagination", {})
                 print(f"[graph] SUCCESS {url}: {len(docs)} docs")
                 return {"documents": docs, "pagination": pagination}
@@ -371,17 +289,7 @@ async def get_graph(page: int = Query(1, ge=1), limit: int = Query(500, ge=1, le
 @router.get("/summary")
 async def get_summary():
     """Return compressed data summaries."""
-    summaries = {}
-    summary_dir = get_processed_data_dir() / "summaries"
-    if summary_dir.exists():
-        for f in summary_dir.iterdir():
-            if f.suffix == ".json":
-                try:
-                    key = f.stem.replace("_summary", "")
-                    summaries[key] = json.loads(f.read_text())
-                except (json.JSONDecodeError, OSError):
-                    continue
-    return summaries
+    return load_processed_json_directory("summaries", stem_suffix_to_strip="_summary")
 
 
 @router.get("/inspections")
@@ -391,9 +299,9 @@ async def get_inspections(
     limit: int = Query(50, le=200),
 ):
     """Return food inspection records."""
-    docs = _filter_by_type(_load_all("public_data"), "food_inspections")
+    docs = filter_public_data_by_dataset(_load_all("public_data"), "food_inspections")
     if neighborhood:
-        docs = _filter_by_neighborhood(docs, neighborhood)
+        docs = filter_docs_by_neighborhood(docs, neighborhood)
     if result:
         docs = [
             d for d in docs
@@ -408,9 +316,9 @@ async def get_permits(
     limit: int = Query(50, le=200),
 ):
     """Return building permit records."""
-    docs = _filter_by_type(_load_all("public_data"), "building_permits")
+    docs = filter_public_data_by_dataset(_load_all("public_data"), "building_permits")
     if neighborhood:
-        docs = _filter_by_neighborhood(docs, neighborhood)
+        docs = filter_docs_by_neighborhood(docs, neighborhood)
     return docs[:limit]
 
 
@@ -420,9 +328,9 @@ async def get_licenses(
     limit: int = Query(50, le=200),
 ):
     """Return business license records."""
-    docs = _filter_by_type(_load_all("public_data"), "business_licenses")
+    docs = filter_public_data_by_dataset(_load_all("public_data"), "business_licenses")
     if neighborhood:
-        docs = _filter_by_neighborhood(docs, neighborhood)
+        docs = filter_docs_by_neighborhood(docs, neighborhood)
     return docs[:limit]
 
 
@@ -452,7 +360,7 @@ async def get_politics(limit: int = Query(50, le=200)):
 @router.get("/cctv/timeseries/{neighborhood}")
 async def get_cctv_timeseries(neighborhood: str):
     """Return 24h CCTV traffic timeseries for a neighborhood."""
-    entry = _load_synthetic_cctv().get(neighborhood)
+    entry = load_processed_json("cctv", "synthetic_analytics.json", default={}).get(neighborhood)
     if not entry:
         raise HTTPException(status_code=404, detail=f"No CCTV data for {neighborhood}")
     return entry["timeseries"]
@@ -463,35 +371,35 @@ async def get_neighborhood(name: str):
     """Return all data for a specific neighborhood."""
     all_public = _load_all("public_data")
 
-    all_inspections = _filter_by_type(all_public, "food_inspections")
-    inspections = _filter_by_neighborhood(all_inspections, name)
+    all_inspections = filter_public_data_by_dataset(all_public, "food_inspections")
+    inspections = filter_docs_by_neighborhood(all_inspections, name)
     # If no neighborhood-specific inspections, show all (data lacks geo tags)
     if not inspections:
         inspections = all_inspections
 
-    all_permits = _filter_by_type(all_public, "building_permits")
-    permits = _filter_by_neighborhood(all_permits, name)
+    all_permits = filter_public_data_by_dataset(all_public, "building_permits")
+    permits = filter_docs_by_neighborhood(all_permits, name)
     if not permits:
         permits = all_permits
 
-    all_licenses = _filter_by_type(all_public, "business_licenses")
-    licenses = _filter_by_neighborhood(all_licenses, name)
+    all_licenses = filter_public_data_by_dataset(all_public, "business_licenses")
+    licenses = filter_docs_by_neighborhood(all_licenses, name)
     if not licenses:
         licenses = all_licenses
 
     all_news = _load_all("news")
-    news = _filter_by_neighborhood(all_news, name)
+    news = filter_docs_by_neighborhood(all_news, name)
     if not news:
         news = all_news
 
     all_politics = _load_all("politics")
-    politics = _filter_by_neighborhood(all_politics, name)
+    politics = filter_docs_by_neighborhood(all_politics, name)
     if not politics:
         politics = all_politics
 
     # Get demographics from GeoJSON
     demo = {}
-    geojson = _load_processed_json("geo", "neighborhood_metrics.json", default={"features": []})
+    geojson = load_processed_json("geo", "neighborhood_metrics.json", default={"features": []})
     for feature in geojson.get("features", []):
         props = feature.get("properties", {})
         if props.get("neighborhood", "").lower() == name.lower():
@@ -499,7 +407,7 @@ async def get_neighborhood(name: str):
             break
 
     # CCTV synthetic analytics
-    cctv_entry = _load_synthetic_cctv().get(name, {})
+    cctv_entry = load_processed_json("cctv", "synthetic_analytics.json", default={}).get(name, {})
     cctv_data = cctv_entry.get("cameras")
     if cctv_data:
         # Enrich with peak_hour/peak_pedestrians from timeseries

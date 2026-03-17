@@ -39,6 +39,8 @@ Instructions for coding agents working in this repository. Keep this file practi
   - Use `ALEITHIA_DATA_ROOT`, `ALEITHIA_RAW_DATA_DIR`, and `ALEITHIA_PROCESSED_DATA_DIR` only as explicit overrides.
   - Runtime code must not silently read from `fixtures/demo_data/`; if demo data is needed locally, use `scripts/bootstrap_demo_data.py`.
   - Do not commit generated runtime files under `data/`.
+- Shared read-helper rule:
+  - Normal shared read/filter/metric helpers now live in `backend/shared_data.py`, `backend/read_helpers.py`, and `backend/metric_helpers.py`. Reuse those from `modal_app/` instead of recreating duplicate helper logic there.
 
 ## Known repo hazards
 
