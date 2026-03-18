@@ -37,7 +37,7 @@ Instructions for coding agents working in this repository. Keep this file practi
   - The canonical local runtime layout is `data/raw/` and `data/processed/`.
   - Do not reintroduce `backend/data/...`, repo-root `raw/` or `processed/`, or filesystem auto-detection fallbacks as supported runtime sources.
   - Use `ALEITHIA_DATA_ROOT`, `ALEITHIA_RAW_DATA_DIR`, and `ALEITHIA_PROCESSED_DATA_DIR` only as explicit overrides.
-  - Runtime code must not silently read from `fixtures/demo_data/`; if demo data is needed locally, use `scripts/bootstrap_demo_data.py`.
+- Runtime code must not silently read from `fixtures/demo_data/`; if demo data is needed locally, use `scripts/bootstrap/bootstrap_demo_data.py`.
   - Do not commit generated runtime files under `data/`.
 - Shared read-helper rule:
   - Normal shared read/filter/metric helpers now live in `backend/shared_data.py`, `backend/read_helpers.py`, and `backend/metric_helpers.py`. Reuse those from `modal_app/` instead of recreating duplicate helper logic there.
@@ -60,7 +60,7 @@ Instructions for coding agents working in this repository. Keep this file practi
 - Local backend dev: `cd backend && uvicorn main:app --reload`
 - Full local stack: `docker-compose up --build`
 - Modal deploy: `modal deploy modal_app/__init__.py`
-- Local pipeline harness: `python scripts/test_pipelines.py`
+- Local pipeline harness: `python scripts/maintenance/test_pipelines.py`
 - Python tests: `pytest -q`
 - Targeted Python tests: `pytest tests/test_risk_scoring.py -q`
 
@@ -77,7 +77,7 @@ Instructions for coding agents working in this repository. Keep this file practi
 ## External services and cost controls
 
 - Many pipelines and scripts call paid, rate-limited, or slow services when credentials are present: Modal GPU jobs, OpenAI, NewsAPI, Reddit, Yelp, Google Places, TomTom, Supermemory, Mapbox, Google Earth Engine, and TikTok scraping infrastructure.
-- Prefer mocks, fixtures, local JSON, or `scripts/test_pipelines.py` before invoking remote services.
+- Prefer mocks, fixtures, local JSON, or `scripts/maintenance/test_pipelines.py` before invoking remote services.
 - Do not trigger broad pipeline runs, deploys, or long GPU jobs unless the task requires them.
 - Never commit secrets or real `.env` values. Use `.env.example` files only as interface references.
 
