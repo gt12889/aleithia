@@ -20,6 +20,7 @@ Instructions for coding agents working in this repository. Keep this file practi
 - `fixtures/demo_data/`: checked-in demo/sample data. Only copy from here into `data/` explicitly.
 - `scripts/`: maintenance utilities and a local pipeline harness.
 - `tests/`: pytest coverage for ranking, retrieval, tracing, Modal web contracts, and risk scoring.
+- `requirements-dev.txt`: root local Python dependency entrypoint for `/.venv` and repo-wide pytest.
 
 ## Architecture rules that matter
 
@@ -57,6 +58,7 @@ Instructions for coding agents working in this repository. Keep this file practi
 - Frontend dev: `cd frontend && npm run dev`
 - Frontend lint: `cd frontend && npm run lint`
 - Frontend build: `cd frontend && npm run build`
+- Python env bootstrap: `make setup-python`
 - Local backend dev: `cd backend && uvicorn main:app --reload`
 - Full local stack: `docker-compose up --build`
 - Modal deploy: `modal deploy modal_app/__init__.py`
@@ -71,7 +73,7 @@ Instructions for coding agents working in this repository. Keep this file practi
 - For API-contract changes, validate both sides: the server route and the frontend caller.
 - Expect baseline validation debt:
   - frontend lint/build may fail on pre-existing issues unrelated to your task;
-  - Python tests depend on packages from both `backend/requirements.txt` and `modal_app/requirements-modal.txt`, plus pytest-related tooling not declared in one unified manifest.
+  - Runtime packaging still uses both `backend/requirements.txt` and `modal_app/requirements-modal.txt`, while local repo-wide pytest should use `requirements-dev.txt`.
 - If a check fails for unrelated baseline reasons, say so clearly and separate it from your change-specific verification.
 
 ## External services and cost controls

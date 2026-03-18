@@ -1,4 +1,9 @@
-.PHONY: dev-frontend dev-backend build-frontend test bootstrap-demo-data pipeline-smoke docker-up
+.PHONY: setup-python dev-frontend dev-backend build-frontend test bootstrap-demo-data pipeline-smoke docker-up
+
+setup-python:
+	python3.12 -m venv .venv
+	.venv/bin/pip install --upgrade pip
+	.venv/bin/pip install -r requirements-dev.txt
 
 dev-frontend:
 	cd frontend && npm run dev
