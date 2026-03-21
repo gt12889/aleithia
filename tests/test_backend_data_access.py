@@ -27,11 +27,57 @@ def _write_json(path: Path, payload: str) -> None:
     path.write_text(payload)
 
 
-def _make_client(monkeypatch, data_root: Path) -> TestClient:
-    monkeypatch.setenv("ALEITHIA_DATA_ROOT", str(data_root))
-    monkeypatch.delenv("ALEITHIA_RAW_DATA_DIR", raising=False)
-    monkeypatch.delenv("ALEITHIA_PROCESSED_DATA_DIR", raising=False)
+class _LocalAccessor:
+    def __init__(self, root: Path):
+        self.root = root
+
+    def _local(self, relative_path: str) -> Path:
+        relative = Path(relative_path) if relative_path else Path(".")
+        return (self.root / relative).resolve()
+
+    def _entry(self, path: Path):
+        if not path.exists():
+            return None
+        relative = path.relative_to(self.root).as_posix()
+        stat = path.stat()
+        return shared_data.SharedFileEntry(
+            path="" if relative == "." else relative,
+            is_file=path.is_file(),
+            is_dir=path.is_dir(),
+            mtime=stat.st_mtime,
+            size=stat.st_size,
+        )
+
+    def get_entry(self, relative_path: str):
+        return self._entry(self._local(relative_path))
+
+    def list_entries(self, relative_path: str, *, recursive: bool = False):
+        base = self._local(relative_path)
+        if not base.exists():
+            return []
+        if base.is_file():
+            entry = self._entry(base)
+            return [entry] if entry is not None else []
+        iterator = base.rglob("*") if recursive else base.iterdir()
+        entries = []
+        for item in iterator:
+            entry = self._entry(item)
+            if entry is not None:
+                entries.append(entry)
+        return entries
+
+    def read_bytes(self, relative_path: str) -> bytes:
+        return self._local(relative_path).read_bytes()
+
+
+def _install_local_accessor(monkeypatch, data_root: Path) -> None:
+    monkeypatch.setattr(shared_data, "_get_accessor", lambda: _LocalAccessor(data_root))
     shared_data._LAST_LOGGED_LAYOUT = None
+    shared_data._VOLUME = None
+
+
+def _make_client(monkeypatch, data_root: Path) -> TestClient:
+    _install_local_accessor(monkeypatch, data_root)
 
     app = FastAPI()
     app.include_router(data_router, prefix="/api/data")
@@ -62,59 +108,19 @@ def _make_user_client(tmp_path: Path) -> TestClient:
 
 
 def test_shared_data_resolution_prefers_env_over_detected_layout(tmp_path, monkeypatch) -> None:
-    repo_root = tmp_path / "repo"
-    backend_root = repo_root / "backend"
-    canonical_raw = repo_root / "data" / "raw"
-    canonical_processed = repo_root / "data" / "processed"
-    explicit_raw = tmp_path / "external" / "raw"
-    explicit_processed = tmp_path / "external" / "processed"
+    data_root = tmp_path / "shared"
+    (data_root / "raw").mkdir(parents=True)
+    (data_root / "processed").mkdir(parents=True)
+    _install_local_accessor(monkeypatch, data_root)
 
-    canonical_raw.mkdir(parents=True)
-    canonical_processed.mkdir(parents=True)
-    explicit_raw.mkdir(parents=True)
-    explicit_processed.mkdir(parents=True)
-
-    monkeypatch.setattr(shared_data, "REPO_ROOT", repo_root)
-    monkeypatch.setattr(shared_data, "BACKEND_ROOT", backend_root)
-    monkeypatch.setenv("ALEITHIA_RAW_DATA_DIR", str(explicit_raw))
-    monkeypatch.setenv("ALEITHIA_PROCESSED_DATA_DIR", str(explicit_processed))
-    monkeypatch.delenv("ALEITHIA_DATA_ROOT", raising=False)
-    shared_data._LAST_LOGGED_LAYOUT = None
-
-    assert shared_data.get_raw_data_dir() == explicit_raw.resolve()
-    assert shared_data.get_processed_data_dir() == explicit_processed.resolve()
-
-
-def test_shared_data_default_resolution_uses_repo_data_root(tmp_path, monkeypatch) -> None:
-    repo_root = tmp_path / "repo"
-    backend_root = repo_root / "backend"
-    canonical_raw = repo_root / "data" / "raw"
-    canonical_processed = repo_root / "data" / "processed"
-    legacy_backend_raw = backend_root / "data" / "raw"
-    legacy_backend_processed = backend_root / "data" / "processed"
-
-    canonical_raw.mkdir(parents=True)
-    canonical_processed.mkdir(parents=True)
-    legacy_backend_raw.mkdir(parents=True)
-    legacy_backend_processed.mkdir(parents=True)
-
-    monkeypatch.setattr(shared_data, "REPO_ROOT", repo_root)
-    monkeypatch.setattr(shared_data, "BACKEND_ROOT", backend_root)
-    monkeypatch.delenv("ALEITHIA_DATA_ROOT", raising=False)
-    monkeypatch.delenv("ALEITHIA_RAW_DATA_DIR", raising=False)
-    monkeypatch.delenv("ALEITHIA_PROCESSED_DATA_DIR", raising=False)
-    shared_data._LAST_LOGGED_LAYOUT = None
-
-    assert shared_data.get_raw_data_dir() == canonical_raw.resolve()
-    assert shared_data.get_processed_data_dir() == canonical_processed.resolve()
+    assert shared_data.get_raw_data_dir().relative_path == "raw"
+    assert shared_data.get_processed_data_dir().relative_path == "processed"
+    assert str(shared_data.get_raw_data_dir()).startswith("modal://")
 
 
 def test_load_raw_docs_recurses_and_skips_invalid_payloads(tmp_path, monkeypatch) -> None:
     data_root = tmp_path / "shared"
-    monkeypatch.setenv("ALEITHIA_DATA_ROOT", str(data_root))
-    monkeypatch.delenv("ALEITHIA_RAW_DATA_DIR", raising=False)
-    monkeypatch.delenv("ALEITHIA_PROCESSED_DATA_DIR", raising=False)
-    shared_data._LAST_LOGGED_LAYOUT = None
+    _install_local_accessor(monkeypatch, data_root)
 
     _write_json(
         data_root / "raw" / "news" / "2026-03-17" / "latest.json",
@@ -135,10 +141,7 @@ def test_load_raw_docs_recurses_and_skips_invalid_payloads(tmp_path, monkeypatch
 
 def test_processed_data_helpers_load_json_directory_and_latest_file(tmp_path, monkeypatch) -> None:
     data_root = tmp_path / "shared"
-    monkeypatch.setenv("ALEITHIA_DATA_ROOT", str(data_root))
-    monkeypatch.delenv("ALEITHIA_RAW_DATA_DIR", raising=False)
-    monkeypatch.delenv("ALEITHIA_PROCESSED_DATA_DIR", raising=False)
-    shared_data._LAST_LOGGED_LAYOUT = None
+    _install_local_accessor(monkeypatch, data_root)
 
     _write_json(data_root / "processed" / "geo" / "neighborhood_metrics.json", '{"features": []}')
     _write_json(data_root / "processed" / "summaries" / "news_summary.json", '{"count": 1}')
@@ -156,15 +159,14 @@ def test_processed_data_helpers_load_json_directory_and_latest_file(tmp_path, mo
         "news": {"count": 1},
         "politics": {"count": 2},
     }
-    assert shared_data.find_latest_processed_json_file("parking", "analysis", pattern="loop_*.json") == newer
+    latest = shared_data.find_latest_processed_json_file("parking", "analysis", pattern="loop_*.json")
+    assert latest is not None
+    assert latest.name == "loop_new.json"
 
 
 def test_raw_source_stats_and_read_helpers(tmp_path, monkeypatch) -> None:
     data_root = tmp_path / "shared"
-    monkeypatch.setenv("ALEITHIA_DATA_ROOT", str(data_root))
-    monkeypatch.delenv("ALEITHIA_RAW_DATA_DIR", raising=False)
-    monkeypatch.delenv("ALEITHIA_PROCESSED_DATA_DIR", raising=False)
-    shared_data._LAST_LOGGED_LAYOUT = None
+    _install_local_accessor(monkeypatch, data_root)
 
     _write_json(
         data_root / "raw" / "news" / "2026-03-17" / "latest.json",
@@ -433,9 +435,8 @@ def test_backend_routes_read_shared_raw_and_processed_data(tmp_path, monkeypatch
 
 
 def test_backend_routes_do_not_read_fixture_tree(tmp_path, monkeypatch) -> None:
-    repo_root = tmp_path / "repo"
-    backend_root = repo_root / "backend"
-    fixture_root = repo_root / "fixtures" / "demo_data"
+    data_root = tmp_path / "shared"
+    fixture_root = tmp_path / "fixtures" / "demo_data"
 
     _write_json(
         fixture_root / "processed" / "geo" / "neighborhood_metrics.json",
@@ -446,12 +447,7 @@ def test_backend_routes_do_not_read_fixture_tree(tmp_path, monkeypatch) -> None:
         '{"headline_count": 99}',
     )
 
-    monkeypatch.setattr(shared_data, "REPO_ROOT", repo_root)
-    monkeypatch.setattr(shared_data, "BACKEND_ROOT", backend_root)
-    monkeypatch.delenv("ALEITHIA_DATA_ROOT", raising=False)
-    monkeypatch.delenv("ALEITHIA_RAW_DATA_DIR", raising=False)
-    monkeypatch.delenv("ALEITHIA_PROCESSED_DATA_DIR", raising=False)
-    shared_data._LAST_LOGGED_LAYOUT = None
+    _install_local_accessor(monkeypatch, data_root)
 
     app = FastAPI()
     app.include_router(data_router, prefix="/api/data")

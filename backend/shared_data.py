@@ -1,91 +1,300 @@
-"""Shared filesystem helpers for backend access to raw and processed data."""
+"""Shared dataset helpers for backend access to Modal Volume-backed raw and processed data."""
 
 from __future__ import annotations
 
+import fnmatch
 import json
 import logging
 import os
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from pathlib import Path
-from typing import Any, Callable, Iterable, Mapping
+from pathlib import Path, PurePosixPath
+from types import SimpleNamespace
+from typing import Any, Callable, Iterable, Mapping, Protocol
+
+import modal
+from modal.volume import FileEntryType
 
 logger = logging.getLogger(__name__)
 
-BACKEND_ROOT = Path(__file__).resolve().parent
-REPO_ROOT = BACKEND_ROOT.parent
+DEFAULT_MODAL_VOLUME_NAME = "alethia-data"
+DEFAULT_RAW_PREFIX = "raw"
+DEFAULT_PROCESSED_PREFIX = "processed"
 
 _LAST_LOGGED_LAYOUT: tuple[str, str] | None = None
+_VOLUME: modal.Volume | None = None
+
+
+class SharedDataAccessor(Protocol):
+    def get_entry(self, relative_path: str) -> "SharedFileEntry | None": ...
+
+    def list_entries(self, relative_path: str, *, recursive: bool = False) -> list["SharedFileEntry"]: ...
+
+    def read_bytes(self, relative_path: str) -> bytes: ...
+
+
+@dataclass(frozen=True)
+class SharedFileEntry:
+    path: str
+    is_file: bool
+    is_dir: bool
+    mtime: float
+    size: int = 0
+
+    @property
+    def name(self) -> str:
+        return PurePosixPath(self.path).name
+
+    @property
+    def suffix(self) -> str:
+        return PurePosixPath(self.path).suffix
+
+    @property
+    def stem(self) -> str:
+        return PurePosixPath(self.path).stem
+
+
+def _normalize_relative_path(value: str | PurePosixPath | "SharedDataPath") -> str:
+    if isinstance(value, SharedDataPath):
+        return value.relative_path
+    raw = str(value or "").strip().replace("\\", "/")
+    if raw in ("", "."):
+        return ""
+    normalized = str(PurePosixPath(raw))
+    return "" if normalized == "." else normalized.strip("/")
+
+
+@dataclass(frozen=True)
+class SharedDataPath:
+    accessor: SharedDataAccessor
+    relative_path: str
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "relative_path", _normalize_relative_path(self.relative_path))
+
+    def __str__(self) -> str:
+        volume_name = os.getenv("ALEITHIA_MODAL_VOLUME_NAME", DEFAULT_MODAL_VOLUME_NAME).strip() or DEFAULT_MODAL_VOLUME_NAME
+        return f"modal://{volume_name}/{self.relative_path}" if self.relative_path else f"modal://{volume_name}"
+
+    def __repr__(self) -> str:
+        return f"SharedDataPath({self.relative_path!r})"
+
+    def __lt__(self, other: object) -> bool:
+        if not isinstance(other, SharedDataPath):
+            return NotImplemented
+        return self.relative_path < other.relative_path
+
+    def __truediv__(self, key: str) -> "SharedDataPath":
+        return self.joinpath(key)
+
+    @property
+    def name(self) -> str:
+        return PurePosixPath(self.relative_path).name
+
+    @property
+    def suffix(self) -> str:
+        return PurePosixPath(self.relative_path).suffix
+
+    @property
+    def stem(self) -> str:
+        return PurePosixPath(self.relative_path).stem
+
+    @property
+    def parent(self) -> "SharedDataPath":
+        parent = PurePosixPath(self.relative_path).parent
+        parent_str = "" if str(parent) == "." else str(parent)
+        return SharedDataPath(self.accessor, parent_str)
+
+    def joinpath(self, *parts: str) -> "SharedDataPath":
+        current = PurePosixPath(self.relative_path) if self.relative_path else PurePosixPath()
+        joined = current.joinpath(*[str(part) for part in parts])
+        return SharedDataPath(self.accessor, str(joined))
+
+    def relative_to(self, other: "SharedDataPath") -> PurePosixPath:
+        return PurePosixPath(self.relative_path).relative_to(PurePosixPath(other.relative_path))
+
+    def exists(self) -> bool:
+        return self.accessor.get_entry(self.relative_path) is not None
+
+    def is_file(self) -> bool:
+        entry = self.accessor.get_entry(self.relative_path)
+        return bool(entry and entry.is_file)
+
+    def is_dir(self) -> bool:
+        entry = self.accessor.get_entry(self.relative_path)
+        return bool(entry and entry.is_dir)
+
+    def stat(self) -> SimpleNamespace:
+        entry = self.accessor.get_entry(self.relative_path)
+        if entry is None:
+            raise OSError(f"No such file or directory: {self}")
+        return SimpleNamespace(st_mtime=entry.mtime, st_size=entry.size)
+
+    def read_bytes(self) -> bytes:
+        return self.accessor.read_bytes(self.relative_path)
+
+    def read_text(self, encoding: str = "utf-8") -> str:
+        return self.read_bytes().decode(encoding)
+
+    def iterdir(self) -> list["SharedDataPath"]:
+        return [SharedDataPath(self.accessor, entry.path) for entry in self.accessor.list_entries(self.relative_path)]
+
+    def glob(self, pattern: str) -> list["SharedDataPath"]:
+        return _glob_paths(self, pattern, recursive=False)
+
+    def rglob(self, pattern: str) -> list["SharedDataPath"]:
+        return _glob_paths(self, pattern, recursive=True)
 
 
 @dataclass(frozen=True)
 class SharedDataPaths:
-    raw_dir: Path
-    processed_dir: Path
+    raw_dir: SharedDataPath
+    processed_dir: SharedDataPath
 
 
-def _resolve_path(value: str) -> Path:
-    return Path(value).expanduser().resolve()
+class ModalVolumeAccessor:
+    def __init__(self, volume: modal.Volume):
+        self._volume = volume
+
+    def _entry_from_modal(self, entry: object) -> SharedFileEntry | None:
+        entry_path = getattr(entry, "path", None)
+        entry_type = getattr(entry, "type", None)
+        if not isinstance(entry_path, str) or entry_type is None:
+            return None
+        return SharedFileEntry(
+            path=entry_path.strip("/"),
+            is_file=entry_type == FileEntryType.FILE,
+            is_dir=entry_type == FileEntryType.DIRECTORY,
+            mtime=float(getattr(entry, "mtime", 0) or 0),
+            size=int(getattr(entry, "size", 0) or 0),
+        )
+
+    def get_entry(self, relative_path: str) -> SharedFileEntry | None:
+        normalized = _normalize_relative_path(relative_path)
+        if not normalized:
+            return SharedFileEntry(path="", is_file=False, is_dir=True, mtime=0.0, size=0)
+        try:
+            entries = self._volume.listdir(normalized, recursive=False)
+        except Exception:
+            return None
+        saw_children = False
+        for entry in entries:
+            parsed = self._entry_from_modal(entry)
+            if parsed is None:
+                continue
+            saw_children = True
+            if parsed.path == normalized:
+                return parsed
+        if saw_children:
+            return SharedFileEntry(path=normalized, is_file=False, is_dir=True, mtime=0.0, size=0)
+        return None
+
+    def list_entries(self, relative_path: str, *, recursive: bool = False) -> list[SharedFileEntry]:
+        normalized = _normalize_relative_path(relative_path)
+        try:
+            entries = self._volume.listdir(normalized, recursive=recursive)
+        except Exception:
+            return []
+        parsed_entries = [self._entry_from_modal(entry) for entry in entries]
+        return [entry for entry in parsed_entries if entry is not None]
+
+    def read_bytes(self, relative_path: str) -> bytes:
+        normalized = _normalize_relative_path(relative_path)
+        chunks = []
+        for chunk in self._volume.read_file(normalized):
+            chunks.append(chunk)
+        return b"".join(chunks)
 
 
-def _resolve_dir(explicit_env: str, suffix: str) -> Path:
-    explicit_value = os.getenv(explicit_env, "").strip()
-    if explicit_value:
-        return _resolve_path(explicit_value)
+def _get_volume() -> modal.Volume:
+    global _VOLUME
+    if _VOLUME is not None:
+        return _VOLUME
 
-    data_root = os.getenv("ALEITHIA_DATA_ROOT", "").strip()
-    if data_root:
-        return _resolve_path(data_root) / suffix
+    volume_name = os.getenv("ALEITHIA_MODAL_VOLUME_NAME", DEFAULT_MODAL_VOLUME_NAME).strip() or DEFAULT_MODAL_VOLUME_NAME
+    environment_name = os.getenv("ALEITHIA_MODAL_ENVIRONMENT", "").strip() or None
+    _VOLUME = modal.Volume.from_name(volume_name, environment_name=environment_name, create_if_missing=False)
+    return _VOLUME
 
-    return (REPO_ROOT / "data" / suffix).resolve()
+
+def _get_accessor() -> SharedDataAccessor:
+    return ModalVolumeAccessor(_get_volume())
 
 
 def get_shared_data_paths() -> SharedDataPaths:
     global _LAST_LOGGED_LAYOUT
 
+    accessor = _get_accessor()
     paths = SharedDataPaths(
-        raw_dir=_resolve_dir("ALEITHIA_RAW_DATA_DIR", "raw"),
-        processed_dir=_resolve_dir("ALEITHIA_PROCESSED_DATA_DIR", "processed"),
+        raw_dir=SharedDataPath(accessor, DEFAULT_RAW_PREFIX),
+        processed_dir=SharedDataPath(accessor, DEFAULT_PROCESSED_PREFIX),
     )
     layout = (str(paths.raw_dir), str(paths.processed_dir))
     if layout != _LAST_LOGGED_LAYOUT:
         _LAST_LOGGED_LAYOUT = layout
         logger.info(
-            "Resolved Aleithia shared data directories: raw=%s processed=%s",
+            "Resolved Aleithia shared data roots from Modal Volume: raw=%s processed=%s",
             paths.raw_dir,
             paths.processed_dir,
         )
-        if not paths.raw_dir.exists():
-            logger.warning("Aleithia raw data directory does not exist: %s", paths.raw_dir)
-        if not paths.processed_dir.exists():
-            logger.warning("Aleithia processed data directory does not exist: %s", paths.processed_dir)
     return paths
 
 
-def get_raw_data_dir() -> Path:
+def get_raw_data_dir() -> SharedDataPath:
     return get_shared_data_paths().raw_dir
 
 
-def get_processed_data_dir() -> Path:
+def get_processed_data_dir() -> SharedDataPath:
     return get_shared_data_paths().processed_dir
 
 
-def _safe_mtime(path: Path) -> float:
+def _glob_paths(directory: SharedDataPath, pattern: str, *, recursive: bool) -> list[SharedDataPath]:
+    if not directory.exists() or not directory.is_dir():
+        return []
+    entries = directory.accessor.list_entries(directory.relative_path, recursive=recursive)
+    matched: list[SharedDataPath] = []
+    for entry in entries:
+        candidate = SharedDataPath(directory.accessor, entry.path)
+        rel_name = candidate.name
+        if fnmatch.fnmatch(rel_name, pattern):
+            matched.append(candidate)
+    return sorted(matched)
+
+
+def _safe_mtime(path: Path | SharedDataPath) -> float:
     try:
-        return path.stat().st_mtime
+        return float(path.stat().st_mtime)
     except OSError:
         return 0.0
 
 
-def safe_mtime(path: Path) -> float:
+def safe_mtime(path: Path | SharedDataPath) -> float:
     return _safe_mtime(path)
 
 
-def load_json_file(path: Path, default: Any = None) -> Any:
-    if not path.exists():
+def read_file_bytes(path: Path | SharedDataPath, default: bytes | None = None) -> bytes | None:
+    if isinstance(path, SharedDataPath):
+        if not path.exists() or not path.is_file():
+            return default
+        try:
+            return path.read_bytes()
+        except OSError:
+            return default
+
+    if not path.exists() or not path.is_file():
         return default
     try:
-        return json.loads(path.read_text())
+        return path.read_bytes()
+    except OSError:
+        return default
+
+
+def load_json_file(path: Path | SharedDataPath, default: Any = None) -> Any:
+    raw_bytes = read_file_bytes(path, default=None)
+    if raw_bytes is None:
+        return default
+    try:
+        return json.loads(raw_bytes.decode("utf-8"))
     except (json.JSONDecodeError, OSError, UnicodeDecodeError):
         return default
 
@@ -94,10 +303,8 @@ def load_processed_json(*parts: str, default: Any = None) -> Any:
     return load_json_file(get_processed_data_dir().joinpath(*parts), default=default)
 
 
-def load_first_existing_json(paths: Iterable[Path], default: Any = None) -> Any:
+def load_first_existing_json(paths: Iterable[Path | SharedDataPath], default: Any = None) -> Any:
     for path in paths:
-        if not path.exists():
-            continue
         parsed = load_json_file(path, default=None)
         if parsed is not None:
             return parsed
@@ -105,14 +312,12 @@ def load_first_existing_json(paths: Iterable[Path], default: Any = None) -> Any:
 
 
 def load_first_matching_json(
-    paths: Iterable[Path],
+    paths: Iterable[Path | SharedDataPath],
     *,
     predicate: Callable[[Any], bool],
     default: Any = None,
 ) -> Any:
     for path in paths:
-        if not path.exists():
-            continue
         parsed = load_json_file(path, default=None)
         if parsed is not None and predicate(parsed):
             return parsed
@@ -141,42 +346,75 @@ def load_processed_json_directory(
     return loaded
 
 
-def find_latest_processed_json_file(*parts: str, pattern: str = "*.json") -> Path | None:
+def find_latest_processed_json_file(*parts: str, pattern: str = "*.json") -> Path | SharedDataPath | None:
     return find_latest_json_file(get_processed_data_dir().joinpath(*parts), pattern=pattern)
 
 
 def iter_json_files(
-    directory: Path,
+    directory: Path | SharedDataPath,
     *,
     recursive: bool = True,
-    sort_key: Callable[[Path], Any] | None = None,
+    sort_key: Callable[[Path | SharedDataPath], Any] | None = None,
     reverse: bool = True,
-) -> list[Path]:
-    if not directory.exists():
-        return []
-
-    iterator = directory.rglob("*.json") if recursive else directory.glob("*.json")
-    files = [path for path in iterator if path.is_file()]
+) -> list[Path | SharedDataPath]:
+    if isinstance(directory, SharedDataPath):
+        files = [path for path in directory.rglob("*.json") if path.is_file()] if recursive else [
+            path for path in directory.glob("*.json") if path.is_file()
+        ]
+    else:
+        if not directory.exists():
+            return []
+        iterator = directory.rglob("*.json") if recursive else directory.glob("*.json")
+        files = [path for path in iterator if path.is_file()]
     return sorted(files, key=sort_key, reverse=reverse) if sort_key is not None else sorted(files, reverse=reverse)
 
 
-def find_latest_json_file(directory: Path, pattern: str = "*.json") -> Path | None:
-    candidates = [path for path in directory.glob(pattern) if path.is_file()]
+def iter_files(
+    directory: Path | SharedDataPath,
+    *,
+    recursive: bool = True,
+    pattern: str = "*",
+    reverse: bool = True,
+) -> list[Path | SharedDataPath]:
+    if isinstance(directory, SharedDataPath):
+        files = directory.rglob(pattern) if recursive else directory.glob(pattern)
+        listed = [path for path in files if path.is_file()]
+    else:
+        if not directory.exists():
+            return []
+        iterator = directory.rglob(pattern) if recursive else directory.glob(pattern)
+        listed = [path for path in iterator if path.is_file()]
+    return sorted(listed, key=lambda path: (safe_mtime(path), str(path)), reverse=reverse)
+
+
+def count_files(directory: Path | SharedDataPath, *, pattern: str = "*", recursive: bool = True) -> int:
+    return len(iter_files(directory, recursive=recursive, pattern=pattern))
+
+
+def find_latest_json_file(directory: Path | SharedDataPath, pattern: str = "*.json") -> Path | SharedDataPath | None:
+    candidates = (
+        [path for path in directory.glob(pattern) if path.is_file()]
+        if isinstance(directory, SharedDataPath)
+        else [path for path in directory.glob(pattern) if path.is_file()]
+    )
     if not candidates:
         return None
     return max(candidates, key=lambda path: (_safe_mtime(path), path.name))
 
 
 def load_json_docs_from_paths(
-    paths: Iterable[Path],
+    paths: Iterable[Path | SharedDataPath],
     *,
     limit: int | None = None,
-    on_error: Callable[[Path, Exception], None] | None = None,
+    on_error: Callable[[Path | SharedDataPath, Exception], None] | None = None,
 ) -> list[dict]:
     docs: list[dict] = []
     for json_file in paths:
         try:
-            parsed = json.loads(json_file.read_text())
+            raw_bytes = read_file_bytes(json_file, default=None)
+            if raw_bytes is None:
+                continue
+            parsed = json.loads(raw_bytes.decode("utf-8"))
         except (json.JSONDecodeError, OSError, UnicodeDecodeError) as exc:
             if on_error is not None:
                 on_error(json_file, exc)
@@ -190,13 +428,13 @@ def load_json_docs_from_paths(
 
 
 def load_json_docs_from_directory(
-    directory: Path,
+    directory: Path | SharedDataPath,
     *,
     limit: int | None = None,
     recursive: bool = True,
-    sort_key: Callable[[Path], Any] | None = None,
+    sort_key: Callable[[Path | SharedDataPath], Any] | None = None,
     reverse: bool = True,
-    on_error: Callable[[Path, Exception], None] | None = None,
+    on_error: Callable[[Path | SharedDataPath, Exception], None] | None = None,
 ) -> list[dict]:
     return load_json_docs_from_paths(
         iter_json_files(directory, recursive=recursive, sort_key=sort_key, reverse=reverse),
@@ -206,7 +444,7 @@ def load_json_docs_from_directory(
 
 
 def scan_source_directories(
-    source_dirs: Mapping[str, Path],
+    source_dirs: Mapping[str, Path | SharedDataPath],
     *,
     neighborhood_sample_limit: int = 100,
     neighborhood_getter: Callable[[dict], str | None] | None = None,
@@ -240,14 +478,17 @@ def scan_source_directories(
     return stats
 
 
-def iter_raw_json_files(source: str) -> list[Path]:
+def iter_raw_json_files(source: str) -> list[Path | SharedDataPath]:
     source_dir = get_raw_data_dir() / source
 
-    def _sort_key(path: Path) -> tuple[str, float]:
-        try:
+    def _sort_key(path: Path | SharedDataPath) -> tuple[str, float]:
+        if isinstance(path, SharedDataPath):
             rel_parent = str(path.relative_to(source_dir).parent)
-        except ValueError:
-            rel_parent = str(path.parent)
+        else:
+            try:
+                rel_parent = str(path.relative_to(source_dir).parent)
+            except ValueError:
+                rel_parent = str(path.parent)
         mtime = _safe_mtime(path)
         return (rel_parent, mtime)
 
