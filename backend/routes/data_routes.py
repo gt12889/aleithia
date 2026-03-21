@@ -1,5 +1,6 @@
 """Routes that serve Aleithia data from shared raw/processed JSON files."""
 
+from datetime import datetime, timezone
 import os
 import re
 from typing import Optional
@@ -17,10 +18,12 @@ from read_helpers import (
     transform_doc_for_graph,
 )
 from shared_data import (
+    get_processed_data_dir,
     get_raw_data_dir,
     get_raw_source_stats,
     load_json_docs_from_directory,
     load_processed_json,
+    scan_source_directories,
 )
 
 router = APIRouter()
@@ -69,6 +72,18 @@ STEP4_SOURCE_NAMES = [
     "tiktok",
 ]
 
+STATUS_SOURCE_NAMES = [
+    "news",
+    "politics",
+    "federal_register",
+    "public_data",
+    "demographics",
+    "reddit",
+    "reviews",
+    "realestate",
+    "tiktok",
+]
+
 _TIKTOK_CREATOR_RE = re.compile(r"tiktok\.com/@([^/?#]+)/video/", re.IGNORECASE)
 
 
@@ -92,6 +107,41 @@ def _load_city_demographics_summary() -> dict:
     if not isinstance(summary, dict):
         summary = load_processed_json("summaries", "demographics_summary.json", default={})
     return summary.get("city_wide", {}) if isinstance(summary, dict) else {}
+
+
+def _parse_iso_timestamp(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+
+
+def _pipeline_state(last_update: str | None, active: bool) -> str:
+    if not active or not last_update:
+        return "no_data"
+
+    last_update_dt = _parse_iso_timestamp(last_update)
+    if last_update_dt is None:
+        return "stale"
+
+    age_seconds = (datetime.now(timezone.utc) - last_update_dt).total_seconds()
+    return "stale" if age_seconds >= 24 * 60 * 60 else "idle"
+
+
+def _get_status_source_stats() -> dict[str, dict[str, object]]:
+    return scan_source_directories(
+        {source: get_raw_data_dir() / source for source in STATUS_SOURCE_NAMES}
+    )
+
+
+def _count_enriched_docs() -> int:
+    enriched_dir = get_processed_data_dir() / "enriched"
+    if not enriched_dir.exists():
+        return 0
+    return len(list(enriched_dir.rglob("*.json")))
 
 
 def _is_count_only_text(value: str) -> bool:
@@ -450,6 +500,52 @@ async def get_summary():
         "total_documents": sum(source_counts.values()),
         "source_counts": source_counts,
         "demographics": _load_city_demographics_summary(),
+    }
+
+
+@router.get("/status")
+async def get_status():
+    """Return document pipeline counts and freshness from shared data."""
+    source_stats = _get_status_source_stats()
+    pipelines = {
+        source: {
+            "doc_count": int(data["doc_count"]),
+            "last_update": data["last_update"],
+            "state": _pipeline_state(
+                data["last_update"] if isinstance(data["last_update"], str) else None,
+                bool(data["active"]),
+            ),
+        }
+        for source, data in source_stats.items()
+    }
+
+    return {
+        "pipelines": pipelines,
+        "enriched_docs": _count_enriched_docs(),
+        "total_docs": sum(item["doc_count"] for item in pipelines.values()),
+    }
+
+
+@router.get("/metrics")
+async def get_metrics():
+    """Return document coverage metrics from shared data."""
+    source_stats = _get_status_source_stats()
+    neighborhoods_covered = set()
+    total_docs = 0
+    active_sources = 0
+
+    for data in source_stats.values():
+        total_docs += int(data["doc_count"])
+        if bool(data["active"]):
+            active_sources += 1
+        neighborhoods_covered.update(data["neighborhoods_covered"])
+
+    return {
+        "total_documents": total_docs,
+        "active_pipelines": active_sources,
+        "neighborhoods_covered": len(neighborhoods_covered),
+        "data_sources": len(STATUS_SOURCE_NAMES),
+        "neighborhoods_total": 77,
     }
 
 

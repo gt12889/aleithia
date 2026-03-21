@@ -12,6 +12,11 @@ def test_frontend_user_routes_use_backend_api_base() -> None:
 
     assert "export const BACKEND_API_BASE = import.meta.env.VITE_BACKEND_URL || '/api/data'" in source
     assert "headers.set('x-user-id', getLocalUserId())" in source
+    assert "const status = await fetchBackendJSON<BackendPipelineStatus>('/status')" in source
+    assert "return fetchBackendJSON<Record<string, number>>('/metrics')" in source
+    assert "runtimeStatus = await fetchJSON<ModalRuntimeStatus>('/status')" in source
+    assert "gpu_status: synthesizeLegacyGpuStatus(gpuMetrics, runtimeStatus)" in source
+    assert "costs: runtimeStatus?.costs ?? {}" in source
     assert "getUserProfile: () => fetchBackendJSON<SavedSettings>('/user/profile', withLocalUserId())," in source
     assert "fetchBackendJSON<UserQuery[]>(`/user/queries?limit=${limit}`, withLocalUserId())," in source
     assert "fetchBackendJSON<UserQuery>('/user/queries', withLocalUserId({" in source

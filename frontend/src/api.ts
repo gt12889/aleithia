@@ -94,12 +94,74 @@ export interface PipelineStatus {
   total_docs: number
 }
 
+interface BackendPipelineStatus {
+  pipelines: Record<string, { doc_count: number; last_update: string | null; state: string }>
+  enriched_docs: number
+  total_docs: number
+}
+
+interface ModalRuntimeStatus {
+  gpu_status?: Record<string, string>
+  costs?: Record<string, unknown>
+}
+
+const DEFAULT_LEGACY_GPU_STATUS: Record<string, string> = {
+  h100_llm: 'disabled',
+  t4_classifier: 'disabled',
+  t4_sentiment: 'disabled',
+  t4_cctv: 'disabled',
+}
+
+function synthesizeLegacyGpuStatus(
+  metrics: GpuMetrics | null,
+  runtimeStatus: ModalRuntimeStatus | null,
+): Record<string, string> {
+  if (metrics) {
+    return {
+      ...DEFAULT_LEGACY_GPU_STATUS,
+      ...Object.fromEntries(
+        Object.entries(metrics).map(([gpu, entry]) => [
+          gpu,
+          entry.status === 'disabled' ? 'disabled' : 'available',
+        ]),
+      ),
+    }
+  }
+
+  return {
+    ...DEFAULT_LEGACY_GPU_STATUS,
+    ...(runtimeStatus?.gpu_status ?? {}),
+  }
+}
+
 export async function fetchPipelineStatus(): Promise<PipelineStatus> {
-  return fetchJSON<PipelineStatus>('/status')
+  const status = await fetchBackendJSON<BackendPipelineStatus>('/status')
+
+  let runtimeStatus: ModalRuntimeStatus | null = null
+  let gpuMetrics: GpuMetrics | null = null
+  if (import.meta.env.VITE_MODAL_URL) {
+    try {
+      runtimeStatus = await fetchJSON<ModalRuntimeStatus>('/status')
+    } catch {
+      runtimeStatus = null
+    }
+
+    try {
+      gpuMetrics = await fetchJSON<GpuMetrics>('/gpu-metrics')
+    } catch {
+      gpuMetrics = null
+    }
+  }
+
+  return {
+    ...status,
+    gpu_status: synthesizeLegacyGpuStatus(gpuMetrics, runtimeStatus),
+    costs: runtimeStatus?.costs ?? {},
+  }
 }
 
 export async function fetchMetrics(): Promise<Record<string, number>> {
-  return fetchJSON<Record<string, number>>('/metrics')
+  return fetchBackendJSON<Record<string, number>>('/metrics')
 }
 
 export interface GpuMetricsEntry {

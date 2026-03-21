@@ -48,26 +48,10 @@ def test_graph_full_endpoint_contract(monkeypatch):
     assert isinstance(data["edges"], list)
 
 
-def test_core_aggregate_endpoints_keep_contract(monkeypatch):
+def test_modal_status_is_runtime_only(monkeypatch):
     from modal_app.api.routes import core as core_routes
     from modal_app.web import web_app
 
-    fake_stats = {
-        "news": {
-            "doc_count": 3,
-            "active": True,
-            "last_update": "2026-03-07T00:00:00+00:00",
-            "neighborhoods_covered": {"Loop", "West Loop"},
-        },
-        "politics": {
-            "doc_count": 0,
-            "active": False,
-            "last_update": None,
-            "neighborhoods_covered": set(),
-        },
-    }
-
-    monkeypatch.setattr(core_routes, "get_source_stats", lambda: fake_stats)
     monkeypatch.setattr(core_routes, "ENABLE_ALETHIA_LLM", False)
 
     client = TestClient(web_app)
@@ -75,21 +59,18 @@ def test_core_aggregate_endpoints_keep_contract(monkeypatch):
     status_resp = client.get("/status")
     assert status_resp.status_code == 200
     status_data = status_resp.json()
-    assert "pipelines" in status_data
-    assert "enriched_docs" in status_data
     assert "gpu_status" in status_data
-    assert "total_docs" in status_data
+    assert "costs" in status_data
+    assert "pipelines" not in status_data
+    assert "enriched_docs" not in status_data
+    assert "total_docs" not in status_data
 
-    metrics_resp = client.get("/metrics")
-    assert metrics_resp.status_code == 200
-    metrics_data = metrics_resp.json()
-    assert set(metrics_data) == {
-        "total_documents",
-        "active_pipelines",
-        "neighborhoods_covered",
-        "data_sources",
-        "neighborhoods_total",
-    }
+
+def test_modal_core_no_longer_owns_metrics_route():
+    from modal_app.web import web_app
+
+    paths = {getattr(route, "path", None) for route in web_app.routes}
+    assert "/metrics" not in paths
 
 
 def test_modal_legacy_routes_no_longer_own_user_settings():

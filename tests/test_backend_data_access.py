@@ -480,6 +480,64 @@ def test_backend_routes_do_not_read_fixture_tree(tmp_path, monkeypatch) -> None:
     }
 
 
+def test_backend_status_and_metrics_routes_own_document_freshness(tmp_path, monkeypatch) -> None:
+    data_root = tmp_path / "shared"
+    client = _make_client(monkeypatch, data_root)
+
+    _write_json(
+        data_root / "raw" / "news" / "2026-03-20" / "recent.json",
+        '{"id":"news-1","geo":{"neighborhood":"Loop"}}',
+    )
+    _write_json(
+        data_root / "raw" / "politics" / "2026-03-18" / "older.json",
+        '{"id":"pol-1","geo":{"neighborhood":"West Loop"}}',
+    )
+    _write_json(
+        data_root / "processed" / "enriched" / "doc-1.json",
+        '{"id":"enriched-1"}',
+    )
+
+    recent_path = data_root / "raw" / "news" / "2026-03-20" / "recent.json"
+    stale_path = data_root / "raw" / "politics" / "2026-03-18" / "older.json"
+    os.utime(recent_path, (1_742_554_800, 1_742_554_800))
+    os.utime(stale_path, (1, 1))
+
+    class FrozenDateTime:
+        @classmethod
+        def now(cls, tz=None):
+            from datetime import datetime, timezone
+
+            return datetime(2025, 3, 21, 12, 0, tzinfo=timezone.utc)
+
+        @classmethod
+        def fromisoformat(cls, value):
+            from datetime import datetime
+
+            return datetime.fromisoformat(value)
+
+    monkeypatch.setattr(data_routes_module, "datetime", FrozenDateTime)
+
+    status = client.get("/api/data/status")
+    assert status.status_code == 200
+    status_data = status.json()
+    assert set(status_data) == {"pipelines", "enriched_docs", "total_docs"}
+    assert status_data["pipelines"]["news"]["state"] == "idle"
+    assert status_data["pipelines"]["politics"]["state"] == "stale"
+    assert status_data["pipelines"]["reddit"]["state"] == "no_data"
+    assert status_data["enriched_docs"] == 1
+    assert status_data["total_docs"] == 2
+
+    metrics = client.get("/api/data/metrics")
+    assert metrics.status_code == 200
+    assert metrics.json() == {
+        "total_documents": 2,
+        "active_pipelines": 2,
+        "neighborhoods_covered": 2,
+        "data_sources": 9,
+        "neighborhoods_total": 77,
+    }
+
+
 def test_backend_user_profile_and_settings_alias_share_storage(tmp_path) -> None:
     client = _make_user_client(tmp_path)
     headers = {"x-user-id": "user-123"}
