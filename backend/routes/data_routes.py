@@ -92,6 +92,7 @@ _TIKTOK_CREATOR_RE = re.compile(r"tiktok\.com/@([^/?#]+)/video/", re.IGNORECASE)
 _DATA_SNAPSHOT_TTL_SECONDS = 15.0
 _DATA_SNAPSHOT_LOCK = threading.Lock()
 _DATA_SNAPSHOT_CACHE: dict[tuple[object, ...], tuple[float, dict[str, object]]] = {}
+_DATA_SNAPSHOT_REFRESHING: set[tuple[object, ...]] = set()
 
 
 def _load_source_docs(source: str, limit: int | None = None) -> list[dict]:
@@ -159,14 +160,79 @@ def _shared_path_cache_token(path: SharedDataPath) -> tuple[object, ...]:
     return ("accessor", id(accessor), path.relative_path)
 
 
-def _get_data_snapshot(source_names: list[str]) -> dict[str, object]:
+def _empty_data_snapshot(source_names: list[str]) -> dict[str, object]:
+    return {
+        "source_stats": {
+            source: {
+                "doc_count": 0,
+                "active": False,
+                "last_update": None,
+                "neighborhoods_covered": set(),
+            }
+            for source in source_names
+        },
+        "enriched_docs": 0,
+    }
+
+
+def _build_data_snapshot(
+    raw_dir: SharedDataPath,
+    processed_dir: SharedDataPath,
+    source_names: list[str],
+) -> dict[str, object]:
+    return {
+        "source_stats": scan_source_directories({source: raw_dir / source for source in source_names}),
+        "enriched_docs": count_files(processed_dir / "enriched", pattern="*.json"),
+    }
+
+
+def _refresh_data_snapshot(cache_key: tuple[object, ...], raw_dir: SharedDataPath, processed_dir: SharedDataPath, source_names: list[str]) -> None:
+    try:
+        snapshot = _build_data_snapshot(raw_dir, processed_dir, source_names)
+    except Exception as exc:
+        print(f"data_snapshot_refresh_error[{cache_key[-1]}]: {exc}")
+    else:
+        with _DATA_SNAPSHOT_LOCK:
+            _DATA_SNAPSHOT_CACHE[cache_key] = (time.monotonic() + _DATA_SNAPSHOT_TTL_SECONDS, snapshot)
+    finally:
+        with _DATA_SNAPSHOT_LOCK:
+            _DATA_SNAPSHOT_REFRESHING.discard(cache_key)
+
+
+def _schedule_data_snapshot_refresh(
+    cache_key: tuple[object, ...],
+    raw_dir: SharedDataPath,
+    processed_dir: SharedDataPath,
+    source_names: list[str],
+) -> None:
+    with _DATA_SNAPSHOT_LOCK:
+        if cache_key in _DATA_SNAPSHOT_REFRESHING:
+            return
+        _DATA_SNAPSHOT_REFRESHING.add(cache_key)
+
+    thread = threading.Thread(
+        target=_refresh_data_snapshot,
+        args=(cache_key, raw_dir, processed_dir, source_names),
+        daemon=True,
+        name=f"data-snapshot-{len(source_names)}",
+    )
+    thread.start()
+
+
+def _snapshot_context(source_names: list[str]) -> tuple[SharedDataPath, SharedDataPath, bool, tuple[object, ...]]:
     raw_dir = get_raw_data_dir()
     processed_dir = get_processed_data_dir()
+    is_modal_volume = getattr(raw_dir.accessor, "_volume", None) is not None
     cache_key = (
         _shared_path_cache_token(raw_dir),
         _shared_path_cache_token(processed_dir),
         tuple(source_names),
     )
+    return raw_dir, processed_dir, is_modal_volume, cache_key
+
+
+def _get_data_snapshot(source_names: list[str]) -> dict[str, object]:
+    raw_dir, processed_dir, is_modal_volume, cache_key = _snapshot_context(source_names)
     now = time.monotonic()
 
     with _DATA_SNAPSHOT_LOCK:
@@ -174,11 +240,13 @@ def _get_data_snapshot(source_names: list[str]) -> dict[str, object]:
         if cached is not None and cached[0] > now:
             return copy.deepcopy(cached[1])
 
-    snapshot = {
-        "source_stats": scan_source_directories({source: raw_dir / source for source in source_names}),
-        "enriched_docs": count_files(processed_dir / "enriched", pattern="*.json"),
-    }
+    if is_modal_volume:
+        _schedule_data_snapshot_refresh(cache_key, raw_dir, processed_dir, source_names)
+        if cached is not None:
+            return copy.deepcopy(cached[1])
+        return _empty_data_snapshot(source_names)
 
+    snapshot = _build_data_snapshot(raw_dir, processed_dir, source_names)
     with _DATA_SNAPSHOT_LOCK:
         _DATA_SNAPSHOT_CACHE[cache_key] = (now + _DATA_SNAPSHOT_TTL_SECONDS, snapshot)
 
@@ -187,6 +255,13 @@ def _get_data_snapshot(source_names: list[str]) -> dict[str, object]:
 
 def _get_source_stats(source_names: list[str]) -> dict[str, dict[str, object]]:
     return _get_data_snapshot(source_names)["source_stats"]
+
+
+def prime_route_data_snapshots() -> None:
+    for source_names in (STEP4_SOURCE_NAMES, STATUS_SOURCE_NAMES):
+        raw_dir, processed_dir, is_modal_volume, cache_key = _snapshot_context(source_names)
+        if is_modal_volume:
+            _schedule_data_snapshot_refresh(cache_key, raw_dir, processed_dir, source_names)
 
 
 def _is_count_only_text(value: str) -> bool:

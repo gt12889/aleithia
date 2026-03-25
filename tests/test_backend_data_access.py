@@ -98,6 +98,7 @@ def _install_local_accessor(monkeypatch, data_root: Path) -> None:
     shared_data._LAST_LOGGED_LAYOUT = None
     shared_data._VOLUME = None
     data_routes_module._DATA_SNAPSHOT_CACHE.clear()
+    data_routes_module._DATA_SNAPSHOT_REFRESHING.clear()
 
 
 def _make_client(monkeypatch, data_root: Path) -> TestClient:
@@ -514,6 +515,42 @@ def test_backend_route_snapshot_cache_reuses_scan_results(tmp_path, monkeypatch)
     assert status.status_code == 200
     assert len(accessor.list_entries_calls) == calls_after_first
     assert status.json()["enriched_docs"] == 1
+
+
+def test_modal_backed_snapshot_requests_return_cached_or_empty_without_inline_scan(tmp_path, monkeypatch) -> None:
+    data_root = tmp_path / "shared"
+    accessor = _CountingAccessor(data_root)
+    accessor._volume = object()
+    monkeypatch.setattr(shared_data, "_get_accessor", lambda: accessor)
+    shared_data._LAST_LOGGED_LAYOUT = None
+    shared_data._VOLUME = None
+    data_routes_module._DATA_SNAPSHOT_CACHE.clear()
+    data_routes_module._DATA_SNAPSHOT_REFRESHING.clear()
+
+    scheduled: list[tuple[object, ...]] = []
+
+    def _fake_schedule(cache_key, raw_dir, processed_dir, source_names):
+        scheduled.append((cache_key, tuple(source_names)))
+
+    monkeypatch.setattr(data_routes_module, "_schedule_data_snapshot_refresh", _fake_schedule)
+
+    snapshot = data_routes_module._get_data_snapshot(["news", "reddit"])
+
+    assert snapshot["enriched_docs"] == 0
+    assert snapshot["source_stats"]["news"] == {
+        "doc_count": 0,
+        "active": False,
+        "last_update": None,
+        "neighborhoods_covered": set(),
+    }
+    assert snapshot["source_stats"]["reddit"] == {
+        "doc_count": 0,
+        "active": False,
+        "last_update": None,
+        "neighborhoods_covered": set(),
+    }
+    assert scheduled
+    assert accessor.list_entries_calls == []
 
 
 def test_backend_routes_do_not_read_fixture_tree(tmp_path, monkeypatch) -> None:
