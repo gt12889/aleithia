@@ -70,10 +70,34 @@ class _LocalAccessor:
         return self._local(relative_path).read_bytes()
 
 
+class _CountingAccessor(_LocalAccessor):
+    def __init__(self, root: Path):
+        super().__init__(root)
+        self.list_entries_calls: list[tuple[str, bool]] = []
+        self.get_entry_calls: list[str] = []
+
+    def get_entry(self, relative_path: str):
+        self.get_entry_calls.append(relative_path)
+        return super().get_entry(relative_path)
+
+    def list_entries(self, relative_path: str, *, recursive: bool = False):
+        self.list_entries_calls.append((relative_path, recursive))
+        return super().list_entries(relative_path, recursive=recursive)
+
+
+class _StrictRecursiveAccessor(_CountingAccessor):
+    def get_entry(self, relative_path: str):
+        normalized = relative_path.replace("\\", "/")
+        if normalized.endswith(".json") and "/" in normalized:
+            raise AssertionError(f"unexpected child get_entry lookup for {normalized}")
+        return super().get_entry(relative_path)
+
+
 def _install_local_accessor(monkeypatch, data_root: Path) -> None:
     monkeypatch.setattr(shared_data, "_get_accessor", lambda: _LocalAccessor(data_root))
     shared_data._LAST_LOGGED_LAYOUT = None
     shared_data._VOLUME = None
+    data_routes_module._DATA_SNAPSHOT_CACHE.clear()
 
 
 def _make_client(monkeypatch, data_root: Path) -> TestClient:
@@ -137,6 +161,32 @@ def test_load_raw_docs_recurses_and_skips_invalid_payloads(tmp_path, monkeypatch
     docs = shared_data.load_raw_docs("news")
 
     assert [doc["id"] for doc in docs] == ["latest", "older"]
+
+
+def test_shared_data_recursive_scans_do_not_requery_child_entries(tmp_path, monkeypatch) -> None:
+    data_root = tmp_path / "shared"
+    accessor = _StrictRecursiveAccessor(data_root)
+    monkeypatch.setattr(shared_data, "_get_accessor", lambda: accessor)
+    shared_data._LAST_LOGGED_LAYOUT = None
+    shared_data._VOLUME = None
+
+    _write_json(
+        data_root / "raw" / "news" / "2026-03-17" / "latest.json",
+        '{"id":"latest","geo":{"neighborhood":"Loop"}}',
+    )
+    _write_json(
+        data_root / "raw" / "news" / "2026-03-16" / "older.json",
+        '{"id":"older","geo":{"neighborhood":"West Loop"}}',
+    )
+
+    news_dir = shared_data.get_raw_data_dir() / "news"
+    files = shared_data.iter_json_files(news_dir)
+    assert [path.name for path in files] == ["latest.json", "older.json"]
+
+    stats = shared_data.scan_source_directories({"news": news_dir}, neighborhood_sample_limit=2)
+    assert stats["news"]["doc_count"] == 2
+    assert stats["news"]["active"] is True
+    assert stats["news"]["neighborhoods_covered"] == {"Loop", "West Loop"}
 
 
 def test_processed_data_helpers_load_json_directory_and_latest_file(tmp_path, monkeypatch) -> None:
@@ -432,6 +482,38 @@ def test_backend_routes_read_shared_raw_and_processed_data(tmp_path, monkeypatch
     assert payload["news"][0]["id"] == "news-1"
     assert payload["politics"][0]["id"] == "pol-1"
     assert payload["cctv"]["peak_hour"] == 17
+
+
+def test_backend_route_snapshot_cache_reuses_scan_results(tmp_path, monkeypatch) -> None:
+    data_root = tmp_path / "shared"
+    accessor = _CountingAccessor(data_root)
+    monkeypatch.setattr(shared_data, "_get_accessor", lambda: accessor)
+    shared_data._LAST_LOGGED_LAYOUT = None
+    shared_data._VOLUME = None
+    data_routes_module._DATA_SNAPSHOT_CACHE.clear()
+
+    _write_json(
+        data_root / "raw" / "news" / "2026-03-17" / "news.json",
+        '{"id":"news-1","geo":{"neighborhood":"Loop"}}',
+    )
+    _write_json(
+        data_root / "processed" / "enriched" / "doc-1.json",
+        '{"id":"enriched-1"}',
+    )
+
+    app = FastAPI()
+    app.include_router(data_router, prefix="/api/data")
+    client = TestClient(app)
+
+    sources = client.get("/api/data/sources")
+    assert sources.status_code == 200
+    calls_after_first = len(accessor.list_entries_calls)
+    assert calls_after_first > 0
+
+    status = client.get("/api/data/status")
+    assert status.status_code == 200
+    assert len(accessor.list_entries_calls) == calls_after_first
+    assert status.json()["enriched_docs"] == 1
 
 
 def test_backend_routes_do_not_read_fixture_tree(tmp_path, monkeypatch) -> None:

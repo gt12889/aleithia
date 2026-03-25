@@ -4,6 +4,7 @@ import type { DataSources, GeoJSON, NeighborhoodData, Document, CCTVTimeseries, 
 export const API_BASE = import.meta.env.VITE_MODAL_URL || '/api/data'
 export const BACKEND_API_BASE = import.meta.env.VITE_BACKEND_URL || '/api/data'
 const LOCAL_USER_ID_KEY = 'aleithia.localUserId'
+const BACKEND_METADATA_TIMEOUT_MS = 10_000
 
 function getLocalUserId(): string {
   if (typeof window === 'undefined') {
@@ -26,21 +27,54 @@ function withLocalUserId(init: RequestInit = {}): RequestInit {
   return { ...init, headers }
 }
 
-async function fetchBaseJSON<T>(base: string, path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(`${base}${path}`, init)
-  if (!res.ok) {
-    const error = await res.text()
-    throw new Error(`API error ${res.status}: ${error}`)
+interface FetchJSONOptions {
+  timeoutMs?: number
+}
+
+async function fetchBaseJSON<T>(base: string, path: string, init?: RequestInit, options?: FetchJSONOptions): Promise<T> {
+  const timeoutMs = options?.timeoutMs
+  const controller = timeoutMs ? new AbortController() : null
+  let didTimeout = false
+  const timeoutId = timeoutMs && controller
+    ? globalThis.setTimeout(() => {
+        didTimeout = true
+        controller.abort()
+      }, timeoutMs)
+    : null
+
+  const onAbort = () => controller?.abort()
+  if (controller && init?.signal) {
+    init.signal.addEventListener('abort', onAbort, { once: true })
   }
-  return res.json()
+
+  try {
+    const res = await fetch(`${base}${path}`, controller ? { ...init, signal: controller.signal } : init)
+    if (!res.ok) {
+      const error = await res.text()
+      throw new Error(`API error ${res.status}: ${error}`)
+    }
+    return res.json()
+  } catch (error) {
+    if (didTimeout && error instanceof DOMException && error.name === 'AbortError') {
+      throw new Error(`Request timed out after ${timeoutMs}ms: ${path}`)
+    }
+    throw error
+  } finally {
+    if (timeoutId !== null) {
+      globalThis.clearTimeout(timeoutId)
+    }
+    if (init?.signal) {
+      init.signal.removeEventListener('abort', onAbort)
+    }
+  }
 }
 
 async function fetchJSON<T>(path: string, init?: RequestInit): Promise<T> {
   return fetchBaseJSON<T>(API_BASE, path, init)
 }
 
-async function fetchBackendJSON<T>(path: string, init?: RequestInit): Promise<T> {
-  return fetchBaseJSON<T>(BACKEND_API_BASE, path, init)
+async function fetchBackendJSON<T>(path: string, init?: RequestInit, options?: FetchJSONOptions): Promise<T> {
+  return fetchBaseJSON<T>(BACKEND_API_BASE, path, init, options)
 }
 
 export interface SavedSettings {
@@ -135,7 +169,7 @@ function synthesizeLegacyGpuStatus(
 }
 
 export async function fetchPipelineStatus(): Promise<PipelineStatus> {
-  const status = await fetchBackendJSON<BackendPipelineStatus>('/status')
+  const status = await fetchBackendJSON<BackendPipelineStatus>('/status', undefined, { timeoutMs: BACKEND_METADATA_TIMEOUT_MS })
 
   let runtimeStatus: ModalRuntimeStatus | null = null
   let gpuMetrics: GpuMetrics | null = null
@@ -161,7 +195,7 @@ export async function fetchPipelineStatus(): Promise<PipelineStatus> {
 }
 
 export async function fetchMetrics(): Promise<Record<string, number>> {
-  return fetchBackendJSON<Record<string, number>>('/metrics')
+  return fetchBackendJSON<Record<string, number>>('/metrics', undefined, { timeoutMs: BACKEND_METADATA_TIMEOUT_MS })
 }
 
 export interface GpuMetricsEntry {
@@ -199,9 +233,9 @@ export async function fetchTrends(neighborhood: string): Promise<TrendData> {
 }
 
 export const api = {
-  sources: () => fetchBackendJSON<DataSources>('/sources'),
+  sources: () => fetchBackendJSON<DataSources>('/sources', undefined, { timeoutMs: BACKEND_METADATA_TIMEOUT_MS }),
   geo: () => fetchBackendJSON<GeoJSON>('/geo'),
-  summary: () => fetchBackendJSON<Record<string, unknown>>('/summary'),
+  summary: () => fetchBackendJSON<Record<string, unknown>>('/summary', undefined, { timeoutMs: BACKEND_METADATA_TIMEOUT_MS }),
   neighborhood: (name: string, businessType?: string) => {
     const qs = businessType ? `?business_type=${encodeURIComponent(businessType)}` : ''
     return fetchJSON<NeighborhoodData>(`/neighborhood/${encodeURIComponent(name)}${qs}`)

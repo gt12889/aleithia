@@ -71,7 +71,7 @@ Instructions for coding agents working in this repository. Keep this file practi
 - Manual Python env bootstrap: `python3.12 -m venv .venv && .venv/bin/pip install -r requirements-dev.txt`
 - Run pytest from the repo-root virtualenv: `.venv/bin/pytest ...`
 - Local backend dev: `cd backend && uvicorn main:app --reload`
-- Full local stack: `docker-compose up --build`
+- Full local stack: `docker-compose up --build` (set `MODAL_TOKEN_ID` and `MODAL_TOKEN_SECRET` in repo-root `.env` so backend volume-backed routes like `/geo` can read `alethia-data`)
 - Modal deploy: `modal deploy modal_app/__init__.py`
 - Local pipeline harness: `python scripts/maintenance/test_pipelines.py`
 - Python tests: `pytest -q`

@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo, useRef, useCallback } from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
 import type { UserProfile, NeighborhoodData, DataSources, RiskScore, CCTVData, ParkingData } from '../types/index.ts'
-import { api, API_BASE, fetchTrends, type TrendData } from '../api.ts'
+import { api, API_BASE, BACKEND_API_BASE, fetchTrends, type TrendData } from '../api.ts'
 import RiskCard from './RiskCard.tsx'
 import MapView from './MapView.tsx'
 import Timer from './Timer.tsx'
@@ -284,6 +284,7 @@ export default function Dashboard({ profile, onReset, onProfileUpdate, initialPr
   const [riskScore, setRiskScore] = useState<RiskScore | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [sourcesWarning, setSourcesWarning] = useState<string | null>(null)
   const [activeTab, setActiveTab] = useState<Tab>('overview')
   const [trends, setTrends] = useState<TrendData | null>(null)
 
@@ -327,35 +328,33 @@ export default function Dashboard({ profile, onReset, onProfileUpdate, initialPr
     const toErrorMessage = (value: unknown) =>
       value instanceof Error ? value.message : String(value)
 
-    const [nbResult, srcResult] = await Promise.allSettled([
-      api.neighborhood(profile.neighborhood, profile.business_type),
-      api.sources(),
-    ])
+    setSourcesWarning(null)
 
-    const errors: string[] = []
-
-    if (nbResult.status === 'fulfilled') {
-      setNeighborhoodData(nbResult.value)
-      setRiskScore(computeRiskScore(nbResult.value, profile))
-      // Fetch trends only when neighborhood payload is available.
-      fetchTrends(profile.neighborhood).then(t => setTrends(t)).catch(() => {})
-    } else {
-      errors.push(`Neighborhood data: ${toErrorMessage(nbResult.reason)}`)
-    }
-
-    if (srcResult.status === 'fulfilled') {
-      setSources(srcResult.value)
-    } else {
-      errors.push(`Data sources: ${toErrorMessage(srcResult.reason)}`)
-    }
-
-    if (errors.length > 0) {
-      setError(errors.join(' | '))
-    } else {
+    try {
+      const neighborhood = await api.neighborhood(profile.neighborhood, profile.business_type)
+      setNeighborhoodData(neighborhood)
+      setRiskScore(computeRiskScore(neighborhood, profile))
       setError(null)
+      setLoading(false)
+
+      fetchTrends(profile.neighborhood).then(t => setTrends(t)).catch(() => {})
+    } catch (err) {
+      setNeighborhoodData(null)
+      setRiskScore(null)
+      setTrends(null)
+      setError(`Neighborhood data: ${toErrorMessage(err)}`)
+      setLoading(false)
+      return
     }
 
-    setLoading(false)
+    api.sources()
+      .then((data) => {
+        setSources(data)
+        setSourcesWarning(null)
+      })
+      .catch((err) => {
+        setSourcesWarning(`Source metadata unavailable: ${toErrorMessage(err)}`)
+      })
   }
 
   useEffect(() => {
@@ -478,7 +477,7 @@ export default function Dashboard({ profile, onReset, onProfileUpdate, initialPr
         <div className="mx-6 mt-4 p-4 bg-red-500/[0.06] border border-red-500/20 text-red-400/80 text-xs font-mono space-y-2">
           <p>{error}</p>
           <p className="text-white/50">
-            API: {API_BASE} — Restart dev server after changing <code className="bg-white/10 px-1">frontend/.env</code>. Deploy: <code className="bg-white/10 px-1">modal deploy modal_app/__init__.py</code>
+            Modal API: {API_BASE} · Backend API: {BACKEND_API_BASE} — Restart dev server after changing <code className="bg-white/10 px-1">frontend/.env</code>. Deploy: <code className="bg-white/10 px-1">modal deploy modal_app/__init__.py</code>
           </p>
           <button
             onClick={() => { setError(null); setLoading(true); refreshData() }}
@@ -497,6 +496,11 @@ export default function Dashboard({ profile, onReset, onProfileUpdate, initialPr
           <PipelineMonitor />
 
           {/* Data sources */}
+          {sourcesWarning && (
+            <div className="text-[10px] font-mono text-amber-300/70">
+              {sourcesWarning}
+            </div>
+          )}
           <DataSourceBadge sources={sourceList} />
 
           {/* Tabs */}

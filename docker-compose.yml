@@ -27,3 +27,5 @@ services:
       - ./frontend/tsconfig.app.json:/app/tsconfig.app.json
     depends_on:
       - backend
+    environment:
+      - ALEITHIA_DEV_BACKEND_PROXY_TARGET=http://backend:8000

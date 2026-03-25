@@ -173,20 +173,18 @@ class ModalVolumeAccessor:
         normalized = _normalize_relative_path(relative_path)
         if not normalized:
             return SharedFileEntry(path="", is_file=False, is_dir=True, mtime=0.0, size=0)
+        parent = PurePosixPath(normalized).parent
+        parent_path = "" if str(parent) == "." else str(parent)
         try:
-            entries = self._volume.listdir(normalized, recursive=False)
+            entries = self._volume.listdir(parent_path, recursive=False)
         except Exception:
             return None
-        saw_children = False
         for entry in entries:
             parsed = self._entry_from_modal(entry)
             if parsed is None:
                 continue
-            saw_children = True
             if parsed.path == normalized:
                 return parsed
-        if saw_children:
-            return SharedFileEntry(path=normalized, is_file=False, is_dir=True, mtime=0.0, size=0)
         return None
 
     def list_entries(self, relative_path: str, *, recursive: bool = False) -> list[SharedFileEntry]:
@@ -248,17 +246,46 @@ def get_processed_data_dir() -> SharedDataPath:
     return get_shared_data_paths().processed_dir
 
 
-def _glob_paths(directory: SharedDataPath, pattern: str, *, recursive: bool) -> list[SharedDataPath]:
-    if not directory.exists() or not directory.is_dir():
-        return []
+def _relative_entry_path(directory: SharedDataPath, entry_path: str) -> PurePosixPath | None:
+    candidate = PurePosixPath(entry_path)
+    if directory.relative_path:
+        try:
+            relative = candidate.relative_to(PurePosixPath(directory.relative_path))
+        except ValueError:
+            return None
+    else:
+        relative = candidate
+    return None if str(relative) in {"", "."} else relative
+
+
+def _shared_entries(
+    directory: SharedDataPath,
+    *,
+    recursive: bool,
+    pattern: str | None = None,
+    files_only: bool | None = None,
+) -> list[SharedFileEntry]:
     entries = directory.accessor.list_entries(directory.relative_path, recursive=recursive)
-    matched: list[SharedDataPath] = []
+    matched: list[SharedFileEntry] = []
     for entry in entries:
-        candidate = SharedDataPath(directory.accessor, entry.path)
-        rel_name = candidate.name
-        if fnmatch.fnmatch(rel_name, pattern):
-            matched.append(candidate)
-    return sorted(matched)
+        relative = _relative_entry_path(directory, entry.path)
+        if relative is None:
+            continue
+        if not recursive and len(relative.parts) != 1:
+            continue
+        if files_only is True and not entry.is_file:
+            continue
+        if files_only is False and not entry.is_dir:
+            continue
+        if pattern is not None and not fnmatch.fnmatch(PurePosixPath(entry.path).name, pattern):
+            continue
+        matched.append(entry)
+    return matched
+
+
+def _glob_paths(directory: SharedDataPath, pattern: str, *, recursive: bool) -> list[SharedDataPath]:
+    entries = _shared_entries(directory, recursive=recursive, pattern=pattern)
+    return sorted(SharedDataPath(directory.accessor, entry.path) for entry in entries)
 
 
 def _safe_mtime(path: Path | SharedDataPath) -> float:
@@ -274,11 +301,9 @@ def safe_mtime(path: Path | SharedDataPath) -> float:
 
 def read_file_bytes(path: Path | SharedDataPath, default: bytes | None = None) -> bytes | None:
     if isinstance(path, SharedDataPath):
-        if not path.exists() or not path.is_file():
-            return default
         try:
             return path.read_bytes()
-        except OSError:
+        except Exception:
             return default
 
     if not path.exists() or not path.is_file():
@@ -329,10 +354,22 @@ def load_processed_json_directory(
     stem_suffix_to_strip: str = "",
 ) -> dict[str, Any]:
     directory = get_processed_data_dir().joinpath(*parts)
+    loaded: dict[str, Any] = {}
+    if isinstance(directory, SharedDataPath):
+        for entry in sorted(_shared_entries(directory, recursive=False, pattern="*.json", files_only=True), key=lambda item: item.path):
+            path = SharedDataPath(directory.accessor, entry.path)
+            parsed = load_json_file(path, default=None)
+            if parsed is None:
+                continue
+            key = path.stem
+            if stem_suffix_to_strip:
+                key = key.removesuffix(stem_suffix_to_strip)
+            loaded[key] = parsed
+        return loaded
+
     if not directory.exists():
         return {}
 
-    loaded: dict[str, Any] = {}
     for path in sorted(directory.iterdir()):
         if not path.is_file() or path.suffix != ".json":
             continue
@@ -358,9 +395,8 @@ def iter_json_files(
     reverse: bool = True,
 ) -> list[Path | SharedDataPath]:
     if isinstance(directory, SharedDataPath):
-        files = [path for path in directory.rglob("*.json") if path.is_file()] if recursive else [
-            path for path in directory.glob("*.json") if path.is_file()
-        ]
+        entries = _shared_entries(directory, recursive=recursive, pattern="*.json", files_only=True)
+        files = [SharedDataPath(directory.accessor, entry.path) for entry in entries]
     else:
         if not directory.exists():
             return []
@@ -377,8 +413,16 @@ def iter_files(
     reverse: bool = True,
 ) -> list[Path | SharedDataPath]:
     if isinstance(directory, SharedDataPath):
-        files = directory.rglob(pattern) if recursive else directory.glob(pattern)
-        listed = [path for path in files if path.is_file()]
+        entries = _shared_entries(directory, recursive=recursive, pattern=pattern, files_only=True)
+        listed = [SharedDataPath(directory.accessor, entry.path) for entry in entries]
+        return sorted(
+            listed,
+            key=lambda path: (
+                next(entry.mtime for entry in entries if entry.path == path.relative_path),
+                str(path),
+            ),
+            reverse=reverse,
+        )
     else:
         if not directory.exists():
             return []
@@ -388,15 +432,20 @@ def iter_files(
 
 
 def count_files(directory: Path | SharedDataPath, *, pattern: str = "*", recursive: bool = True) -> int:
+    if isinstance(directory, SharedDataPath):
+        return len(_shared_entries(directory, recursive=recursive, pattern=pattern, files_only=True))
     return len(iter_files(directory, recursive=recursive, pattern=pattern))
 
 
 def find_latest_json_file(directory: Path | SharedDataPath, pattern: str = "*.json") -> Path | SharedDataPath | None:
-    candidates = (
-        [path for path in directory.glob(pattern) if path.is_file()]
-        if isinstance(directory, SharedDataPath)
-        else [path for path in directory.glob(pattern) if path.is_file()]
-    )
+    if isinstance(directory, SharedDataPath):
+        candidates = _shared_entries(directory, recursive=False, pattern=pattern, files_only=True)
+        if not candidates:
+            return None
+        latest = max(candidates, key=lambda entry: (entry.mtime, PurePosixPath(entry.path).name))
+        return SharedDataPath(directory.accessor, latest.path)
+
+    candidates = [path for path in directory.glob(pattern) if path.is_file()]
     if not candidates:
         return None
     return max(candidates, key=lambda path: (_safe_mtime(path), path.name))
@@ -454,9 +503,32 @@ def scan_source_directories(
 
     stats: dict[str, dict[str, object]] = {}
     for source, source_dir in source_dirs.items():
+        neighborhoods: set[str] = set()
+        if isinstance(source_dir, SharedDataPath):
+            entries = _shared_entries(source_dir, recursive=True, pattern="*.json", files_only=True)
+            latest_entry = max(entries, key=lambda entry: (entry.mtime, entry.path), default=None)
+            for entry in entries[:neighborhood_sample_limit]:
+                parsed = load_json_file(SharedDataPath(source_dir.accessor, entry.path), default=None)
+                if not isinstance(parsed, dict):
+                    continue
+                neighborhood = neighborhood_getter(parsed)
+                if neighborhood:
+                    neighborhoods.add(neighborhood)
+
+            stats[source] = {
+                "doc_count": len(entries),
+                "active": bool(entries),
+                "last_update": (
+                    datetime.fromtimestamp(latest_entry.mtime, tz=timezone.utc).isoformat()
+                    if latest_entry is not None
+                    else None
+                ),
+                "neighborhoods_covered": neighborhoods,
+            }
+            continue
+
         json_files = iter_json_files(source_dir)
         latest = max(json_files, key=_safe_mtime, default=None)
-        neighborhoods: set[str] = set()
         for json_file in json_files[:neighborhood_sample_limit]:
             parsed = load_json_file(json_file, default=None)
             if not isinstance(parsed, dict):
@@ -480,6 +552,18 @@ def scan_source_directories(
 
 def iter_raw_json_files(source: str) -> list[Path | SharedDataPath]:
     source_dir = get_raw_data_dir() / source
+
+    if isinstance(source_dir, SharedDataPath):
+        entries = _shared_entries(source_dir, recursive=True, pattern="*.json", files_only=True)
+        entries.sort(
+            key=lambda entry: (
+                str(_relative_entry_path(source_dir, entry.path).parent),
+                entry.mtime,
+                entry.path,
+            ),
+            reverse=True,
+        )
+        return [SharedDataPath(source_dir.accessor, entry.path) for entry in entries]
 
     def _sort_key(path: Path | SharedDataPath) -> tuple[str, float]:
         if isinstance(path, SharedDataPath):

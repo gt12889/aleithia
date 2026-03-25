@@ -1,8 +1,11 @@
 """Routes that serve Aleithia data from shared raw/processed JSON files."""
 
+import copy
 from datetime import datetime, timezone
 import os
 import re
+import threading
+import time
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -18,9 +21,10 @@ from read_helpers import (
     transform_doc_for_graph,
 )
 from shared_data import (
+    SharedDataPath,
+    count_files,
     get_processed_data_dir,
     get_raw_data_dir,
-    get_raw_source_stats,
     load_json_docs_from_directory,
     load_processed_json,
     scan_source_directories,
@@ -85,6 +89,9 @@ STATUS_SOURCE_NAMES = [
 ]
 
 _TIKTOK_CREATOR_RE = re.compile(r"tiktok\.com/@([^/?#]+)/video/", re.IGNORECASE)
+_DATA_SNAPSHOT_TTL_SECONDS = 15.0
+_DATA_SNAPSHOT_LOCK = threading.Lock()
+_DATA_SNAPSHOT_CACHE: dict[tuple[object, ...], tuple[float, dict[str, object]]] = {}
 
 
 def _load_source_docs(source: str, limit: int | None = None) -> list[dict]:
@@ -132,16 +139,54 @@ def _pipeline_state(last_update: str | None, active: bool) -> str:
 
 
 def _get_status_source_stats() -> dict[str, dict[str, object]]:
-    return scan_source_directories(
-        {source: get_raw_data_dir() / source for source in STATUS_SOURCE_NAMES}
-    )
+    return _get_data_snapshot(STATUS_SOURCE_NAMES)["source_stats"]
 
 
 def _count_enriched_docs() -> int:
-    enriched_dir = get_processed_data_dir() / "enriched"
-    if not enriched_dir.exists():
-        return 0
-    return len(list(enriched_dir.rglob("*.json")))
+    return int(_get_data_snapshot(STATUS_SOURCE_NAMES)["enriched_docs"])
+
+
+def _shared_path_cache_token(path: SharedDataPath) -> tuple[object, ...]:
+    accessor = path.accessor
+    volume = getattr(accessor, "_volume", None)
+    if volume is not None:
+        return ("modal-volume", id(volume), path.relative_path)
+
+    root = getattr(accessor, "root", None)
+    if root is not None:
+        return ("local-root", str(root), path.relative_path)
+
+    return ("accessor", id(accessor), path.relative_path)
+
+
+def _get_data_snapshot(source_names: list[str]) -> dict[str, object]:
+    raw_dir = get_raw_data_dir()
+    processed_dir = get_processed_data_dir()
+    cache_key = (
+        _shared_path_cache_token(raw_dir),
+        _shared_path_cache_token(processed_dir),
+        tuple(source_names),
+    )
+    now = time.monotonic()
+
+    with _DATA_SNAPSHOT_LOCK:
+        cached = _DATA_SNAPSHOT_CACHE.get(cache_key)
+        if cached is not None and cached[0] > now:
+            return copy.deepcopy(cached[1])
+
+    snapshot = {
+        "source_stats": scan_source_directories({source: raw_dir / source for source in source_names}),
+        "enriched_docs": count_files(processed_dir / "enriched", pattern="*.json"),
+    }
+
+    with _DATA_SNAPSHOT_LOCK:
+        _DATA_SNAPSHOT_CACHE[cache_key] = (now + _DATA_SNAPSHOT_TTL_SECONDS, snapshot)
+
+    return copy.deepcopy(snapshot)
+
+
+def _get_source_stats(source_names: list[str]) -> dict[str, dict[str, object]]:
+    return _get_data_snapshot(source_names)["source_stats"]
 
 
 def _is_count_only_text(value: str) -> bool:
@@ -398,7 +443,7 @@ async def put_user_settings(
 @router.get("/sources")
 async def get_sources():
     """Return available data sources with counts."""
-    source_stats = get_raw_source_stats(STEP4_SOURCE_NAMES)
+    source_stats = _get_source_stats(STEP4_SOURCE_NAMES)
     return {
         source: {"count": data["doc_count"], "active": data["active"]}
         for source, data in source_stats.items()
@@ -494,7 +539,7 @@ async def get_graph(page: int = Query(1, ge=1), limit: int = Query(500, ge=1, le
 @router.get("/summary")
 async def get_summary():
     """Return aggregate source counts and citywide demographics."""
-    source_stats = get_raw_source_stats(STEP4_SOURCE_NAMES)
+    source_stats = _get_source_stats(STEP4_SOURCE_NAMES)
     source_counts = {source: data["doc_count"] for source, data in source_stats.items()}
     return {
         "total_documents": sum(source_counts.values()),

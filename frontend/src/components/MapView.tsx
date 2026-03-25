@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
 import mapboxgl from 'mapbox-gl'
 import 'mapbox-gl/dist/mapbox-gl.css'
-import { BACKEND_API_BASE } from '../api.ts'
+import { api } from '../api.ts'
 
 type HeatmapLayer = 'regulatory' | 'business' | 'sentiment'
 
@@ -108,17 +108,15 @@ export default function MapView({ activeNeighborhood, geojsonUrl }: Props) {
     map.addControl(new mapboxgl.AttributionControl({ compact: true }), 'bottom-right')
 
     map.on('load', () => {
-      const sourceUrl = `${BACKEND_API_BASE}/geo`
-      console.log('Fetching GeoJSON from:', sourceUrl) // Debug: check URL being fetched
+      setMapError(null)
 
-      // Try fetching the GeoJSON; if it fails, use an empty collection
-      fetch(sourceUrl)
-        .then((res) => (res.ok ? res.json() : Promise.reject(res.statusText)))
+      api.geo()
         .then((geojson) => {
-          console.log('Loaded GeoJSON:', geojson) // Debug: print API response
           addSourceAndLayers(map, geojson)
         })
-        .catch(() => {
+        .catch((error: unknown) => {
+          console.error('Failed to load heatmap GeoJSON:', error)
+          setMapError('Heatmap data failed to load — check backend /geo routing')
           // Fallback: empty feature collection so layers still exist
           addSourceAndLayers(map, { type: 'FeatureCollection', features: [] })
         })
