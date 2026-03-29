@@ -18,7 +18,9 @@ def test_frontend_user_routes_use_backend_api_base() -> None:
     assert "runtimeStatus = await fetchJSON<ModalRuntimeStatus>('/status')" in source
     assert "gpu_status: synthesizeLegacyGpuStatus(gpuMetrics, runtimeStatus)" in source
     assert "costs: runtimeStatus?.costs ?? {}" in source
-    assert "sources: () => fetchBackendJSON<DataSources>('/sources', undefined, { timeoutMs: BACKEND_METADATA_TIMEOUT_MS })," in source
+    assert "metadata_ready: boolean" in source
+    assert "export interface SourceSnapshot {" in source
+    assert "sources: () => fetchBackendJSON<SourceSnapshot>('/sources', undefined, { timeoutMs: BACKEND_METADATA_TIMEOUT_MS })," in source
     assert "summary: () => fetchBackendJSON<Record<string, unknown>>('/summary', undefined, { timeoutMs: BACKEND_METADATA_TIMEOUT_MS })," in source
     assert "getUserProfile: () => fetchBackendJSON<SavedSettings>('/user/profile', withLocalUserId())," in source
     assert "fetchBackendJSON<UserQuery[]>(`/user/queries?limit=${limit}`, withLocalUserId())," in source

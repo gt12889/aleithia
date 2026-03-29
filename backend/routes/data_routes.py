@@ -162,6 +162,7 @@ def _shared_path_cache_token(path: SharedDataPath) -> tuple[object, ...]:
 
 def _empty_data_snapshot(source_names: list[str]) -> dict[str, object]:
     return {
+        "metadata_ready": False,
         "source_stats": {
             source: {
                 "doc_count": 0,
@@ -181,17 +182,23 @@ def _build_data_snapshot(
     source_names: list[str],
 ) -> dict[str, object]:
     return {
-        "source_stats": scan_source_directories({source: raw_dir / source for source in source_names}),
+        "metadata_ready": True,
+        "source_stats": scan_source_directories(
+            {source: raw_dir / source for source in source_names},
+            neighborhood_sample_limit=0,
+        ),
         "enriched_docs": count_files(processed_dir / "enriched", pattern="*.json"),
     }
 
 
 def _refresh_data_snapshot(cache_key: tuple[object, ...], raw_dir: SharedDataPath, processed_dir: SharedDataPath, source_names: list[str]) -> None:
     try:
-        snapshot = _build_data_snapshot(raw_dir, processed_dir, source_names)
-    except Exception as exc:
-        print(f"data_snapshot_refresh_error[{cache_key[-1]}]: {exc}")
-    else:
+        try:
+            snapshot = _build_data_snapshot(raw_dir, processed_dir, source_names)
+        except Exception as exc:
+            print(f"data_snapshot_refresh_error[{cache_key[-1]}]: {exc}")
+            snapshot = _empty_data_snapshot(source_names)
+            snapshot["metadata_ready"] = True
         with _DATA_SNAPSHOT_LOCK:
             _DATA_SNAPSHOT_CACHE[cache_key] = (time.monotonic() + _DATA_SNAPSHOT_TTL_SECONDS, snapshot)
     finally:
@@ -518,10 +525,14 @@ async def put_user_settings(
 @router.get("/sources")
 async def get_sources():
     """Return available data sources with counts."""
-    source_stats = _get_source_stats(STEP4_SOURCE_NAMES)
+    snapshot = _get_data_snapshot(STEP4_SOURCE_NAMES)
+    source_stats = snapshot["source_stats"]
     return {
-        source: {"count": data["doc_count"], "active": data["active"]}
-        for source, data in source_stats.items()
+        "metadata_ready": bool(snapshot["metadata_ready"]),
+        "sources": {
+            source: {"count": data["doc_count"], "active": data["active"]}
+            for source, data in source_stats.items()
+        },
     }
 
 
@@ -626,7 +637,8 @@ async def get_summary():
 @router.get("/status")
 async def get_status():
     """Return document pipeline counts and freshness from shared data."""
-    source_stats = _get_status_source_stats()
+    snapshot = _get_data_snapshot(STATUS_SOURCE_NAMES)
+    source_stats = snapshot["source_stats"]
     pipelines = {
         source: {
             "doc_count": int(data["doc_count"]),
@@ -640,8 +652,9 @@ async def get_status():
     }
 
     return {
+        "metadata_ready": bool(snapshot["metadata_ready"]),
         "pipelines": pipelines,
-        "enriched_docs": _count_enriched_docs(),
+        "enriched_docs": int(snapshot["enriched_docs"]),
         "total_docs": sum(item["doc_count"] for item in pipelines.values()),
     }
 

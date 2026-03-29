@@ -285,6 +285,7 @@ export default function Dashboard({ profile, onReset, onProfileUpdate, initialPr
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [sourcesWarning, setSourcesWarning] = useState<string | null>(null)
+  const [sourcesMetadataReady, setSourcesMetadataReady] = useState(false)
   const [activeTab, setActiveTab] = useState<Tab>('overview')
   const [trends, setTrends] = useState<TrendData | null>(null)
 
@@ -296,6 +297,7 @@ export default function Dashboard({ profile, onReset, onProfileUpdate, initialPr
   const isDragging = useRef(false)
   const startX = useRef(0)
   const startWidth = useRef(SIDEBAR_DEFAULT)
+  const sourcesRetryTimeoutRef = useRef<number | null>(null)
 
   const onDragStart = useCallback((e: React.MouseEvent) => {
     e.preventDefault()
@@ -328,7 +330,36 @@ export default function Dashboard({ profile, onReset, onProfileUpdate, initialPr
     const toErrorMessage = (value: unknown) =>
       value instanceof Error ? value.message : String(value)
 
+    if (sourcesRetryTimeoutRef.current !== null) {
+      window.clearTimeout(sourcesRetryTimeoutRef.current)
+      sourcesRetryTimeoutRef.current = null
+    }
+
     setSourcesWarning(null)
+    setSourcesMetadataReady(false)
+
+    const loadSources = async () => {
+      try {
+        const snapshot = await api.sources()
+        if (!snapshot.metadata_ready) {
+          setSources(null)
+          setSourcesMetadataReady(false)
+          setSourcesWarning('Warming source metadata...')
+          sourcesRetryTimeoutRef.current = window.setTimeout(() => {
+            sourcesRetryTimeoutRef.current = null
+            void loadSources()
+          }, 5000)
+          return
+        }
+
+        setSources(snapshot.sources)
+        setSourcesMetadataReady(true)
+        setSourcesWarning(null)
+      } catch (err) {
+        setSourcesMetadataReady(false)
+        setSourcesWarning(`Source metadata unavailable: ${toErrorMessage(err)}`)
+      }
+    }
 
     try {
       const neighborhood = await api.neighborhood(profile.neighborhood, profile.business_type)
@@ -347,20 +378,19 @@ export default function Dashboard({ profile, onReset, onProfileUpdate, initialPr
       return
     }
 
-    api.sources()
-      .then((data) => {
-        setSources(data)
-        setSourcesWarning(null)
-      })
-      .catch((err) => {
-        setSourcesWarning(`Source metadata unavailable: ${toErrorMessage(err)}`)
-      })
+    void loadSources()
   }
 
   useEffect(() => {
     let cancelled = false
     refreshData().then(() => { if (cancelled) return })
-    return () => { cancelled = true }
+    return () => {
+      cancelled = true
+      if (sourcesRetryTimeoutRef.current !== null) {
+        window.clearTimeout(sourcesRetryTimeoutRef.current)
+        sourcesRetryTimeoutRef.current = null
+      }
+    }
   }, [profile])
 
   const sourceList = sources
@@ -501,7 +531,7 @@ export default function Dashboard({ profile, onReset, onProfileUpdate, initialPr
               {sourcesWarning}
             </div>
           )}
-          <DataSourceBadge sources={sourceList} />
+          {sourcesMetadataReady && <DataSourceBadge sources={sourceList} />}
 
           {/* Tabs */}
           <div className="flex gap-0 border-b border-white/[0.06]">

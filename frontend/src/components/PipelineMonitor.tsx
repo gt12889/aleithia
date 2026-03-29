@@ -40,12 +40,23 @@ export default function PipelineMonitor() {
     )
   }
 
+  if (!status.metadata_ready) {
+    return (
+      <div className="border border-white/[0.06] bg-white/[0.01] p-3">
+        <div className="flex items-center justify-between">
+          <span className="text-[10px] font-mono uppercase tracking-wider text-white/30">Pipeline Monitor</span>
+          <span className="text-[10px] font-mono text-amber-300/70">Warming metadata...</span>
+        </div>
+      </div>
+    )
+  }
+
   const stateColors: Record<string, string> = {
     idle: 'text-emerald-400/60',
     running: 'text-blue-400/60',
     queued: 'text-yellow-400/60',
     no_data: 'text-white/15',
-    stale: 'text-red-400/60',
+    stale: 'text-amber-400/60',
   }
 
   const stateIcons: Record<string, string> = {
@@ -53,14 +64,14 @@ export default function PipelineMonitor() {
     running: 'bg-blue-400 animate-pulse',
     queued: 'bg-yellow-400',
     no_data: 'bg-white/20',
-    stale: 'bg-red-400',
+    stale: 'bg-amber-400',
   }
 
   const pipelines = Object.entries(status.pipelines)
 
   const hasRunning = Object.values(status.gpu_status).some((s) => s === 'available')
   return (
-    <div className={`border overflow-hidden transition-shadow ${hasRunning ? 'border-[#2B95D6]/30 bg-white/[0.01]' : 'border-white/[0.06] bg-white/[0.01]'}`} style={hasRunning ? { boxShadow: '0 0 16px rgba(43, 149, 214, 0.12)' } : undefined}>
+    <div className={`border transition-shadow ${hasRunning ? 'border-[#2B95D6]/30 bg-white/[0.01]' : 'border-white/[0.06] bg-white/[0.01]'}`} style={hasRunning ? { boxShadow: '0 0 16px rgba(43, 149, 214, 0.12)' } : undefined}>
       <button
         onClick={() => setExpanded(!expanded)}
         className="w-full flex items-center justify-between px-4 py-3 hover:bg-white/[0.02] transition-colors cursor-pointer"

@@ -416,10 +416,12 @@ def test_backend_routes_read_shared_raw_and_processed_data(tmp_path, monkeypatch
 
     sources = client.get("/api/data/sources")
     assert sources.status_code == 200
-    assert sources.json()["news"] == {"count": 1, "active": True}
-    assert sources.json()["reddit"] == {"count": 1, "active": True}
-    assert sources.json()["tiktok"] == {"count": 1, "active": True}
-    assert sources.json()["federal_register"] == {"count": 0, "active": False}
+    sources_data = sources.json()
+    assert sources_data["metadata_ready"] is True
+    assert sources_data["sources"]["news"] == {"count": 1, "active": True}
+    assert sources_data["sources"]["reddit"] == {"count": 1, "active": True}
+    assert sources_data["sources"]["tiktok"] == {"count": 1, "active": True}
+    assert sources_data["sources"]["federal_register"] == {"count": 0, "active": False}
 
     news = client.get("/api/data/news")
     assert news.status_code == 200
@@ -508,12 +510,14 @@ def test_backend_route_snapshot_cache_reuses_scan_results(tmp_path, monkeypatch)
 
     sources = client.get("/api/data/sources")
     assert sources.status_code == 200
+    assert sources.json()["metadata_ready"] is True
     calls_after_first = len(accessor.list_entries_calls)
     assert calls_after_first > 0
 
     status = client.get("/api/data/status")
     assert status.status_code == 200
     assert len(accessor.list_entries_calls) == calls_after_first
+    assert status.json()["metadata_ready"] is True
     assert status.json()["enriched_docs"] == 1
 
 
@@ -536,6 +540,7 @@ def test_modal_backed_snapshot_requests_return_cached_or_empty_without_inline_sc
 
     snapshot = data_routes_module._get_data_snapshot(["news", "reddit"])
 
+    assert snapshot["metadata_ready"] is False
     assert snapshot["enriched_docs"] == 0
     assert snapshot["source_stats"]["news"] == {
         "doc_count": 0,
@@ -635,7 +640,8 @@ def test_backend_status_and_metrics_routes_own_document_freshness(tmp_path, monk
     status = client.get("/api/data/status")
     assert status.status_code == 200
     status_data = status.json()
-    assert set(status_data) == {"pipelines", "enriched_docs", "total_docs"}
+    assert set(status_data) == {"metadata_ready", "pipelines", "enriched_docs", "total_docs"}
+    assert status_data["metadata_ready"] is True
     assert status_data["pipelines"]["news"]["state"] == "idle"
     assert status_data["pipelines"]["politics"]["state"] == "stale"
     assert status_data["pipelines"]["reddit"]["state"] == "no_data"
@@ -647,7 +653,7 @@ def test_backend_status_and_metrics_routes_own_document_freshness(tmp_path, monk
     assert metrics.json() == {
         "total_documents": 2,
         "active_pipelines": 2,
-        "neighborhoods_covered": 2,
+        "neighborhoods_covered": 0,
         "data_sources": 9,
         "neighborhoods_total": 77,
     }

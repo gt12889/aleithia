@@ -121,6 +121,7 @@ export async function requestDeepDive(
 }
 
 export interface PipelineStatus {
+  metadata_ready: boolean
   pipelines: Record<string, { doc_count: number; last_update: string | null; state: string }>
   enriched_docs: number
   gpu_status: Record<string, string>
@@ -129,9 +130,15 @@ export interface PipelineStatus {
 }
 
 interface BackendPipelineStatus {
+  metadata_ready: boolean
   pipelines: Record<string, { doc_count: number; last_update: string | null; state: string }>
   enriched_docs: number
   total_docs: number
+}
+
+export interface SourceSnapshot {
+  metadata_ready: boolean
+  sources: DataSources
 }
 
 interface ModalRuntimeStatus {
@@ -233,7 +240,7 @@ export async function fetchTrends(neighborhood: string): Promise<TrendData> {
 }
 
 export const api = {
-  sources: () => fetchBackendJSON<DataSources>('/sources', undefined, { timeoutMs: BACKEND_METADATA_TIMEOUT_MS }),
+  sources: () => fetchBackendJSON<SourceSnapshot>('/sources', undefined, { timeoutMs: BACKEND_METADATA_TIMEOUT_MS }),
   geo: () => fetchBackendJSON<GeoJSON>('/geo'),
   summary: () => fetchBackendJSON<Record<string, unknown>>('/summary', undefined, { timeoutMs: BACKEND_METADATA_TIMEOUT_MS }),
   neighborhood: (name: string, businessType?: string) => {
