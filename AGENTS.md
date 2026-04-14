@@ -33,6 +33,7 @@ Instructions for coding agents working in this repository. Keep this file practi
 - `frontend/src/api.ts` uses `VITE_MODAL_URL` when set, and otherwise falls back to `/api/data`.
 - The app currently runs in local, unauthenticated mode. Frontend profile/history calls attach an `x-user-id` header from localStorage, and `backend/auth.py` falls back to `ALEITHIA_DEFAULT_USER_ID` when no header is provided.
 - Many frontend endpoints are implemented only in `modal_app/web.py`, not in `backend/`. This includes `/analyze`, `/status`, `/metrics`, `/gpu-metrics`, `/trends/*`, `/vision/*`, `/parking/*`, `/social-trends/*`, and `/graph/full`.
+- CCTV/vision frontend flows should be treated as Modal-owned unless you verify otherwise. In particular, when `ENABLE_CCTV_ANALYSIS=false`, the Modal API serves synthetic CCTV analytics for counts/timeseries and skips GPU analysis; do not assume those synthetic analytics correspond to a real frame or analyzed camera result.
 - Simple read-only routes such as `/sources`, `/summary`, `/geo`, `/news`, `/politics`, `/inspections`, `/permits`, `/licenses`, `/reddit`, `/reviews`, `/realestate`, and `/tiktok` now belong in `backend/`, not `modal_app/`.
 - Status split rule: document/source freshness belongs in `backend/` (`/status`, `/metrics`), while Modal keeps runtime-only status such as GPU/cost reporting (`/status`, `/gpu-metrics`).
 - Actian VectorAI DB is no longer part of the supported `modal_app` architecture. Do not add new `vectordb` wiring, health fields, image config, or Modal discovery imports unless the task explicitly restores that integration.
@@ -51,6 +52,7 @@ Instructions for coding agents working in this repository. Keep this file practi
   - Install local test/dev dependencies from `requirements-dev.txt`.
 - Shared read-helper rule:
   - Normal shared read/filter/metric helpers now live in `backend/shared_data.py`, `backend/read_helpers.py`, and `backend/metric_helpers.py`. Reuse those from `modal_app/` instead of recreating duplicate helper logic there.
+  - For disabled CCTV-analysis mode, prefer `processed/cctv/synthetic_analytics.json` from the shared Modal volume; do not add runtime reads that depend directly on `fixtures/demo_data/`.
 
 ## Known repo hazards
 
@@ -110,6 +112,7 @@ Instructions for coding agents working in this repository. Keep this file practi
 - Keep local user resolution compatible with the current unauthenticated flow in `backend/auth.py`: optional `x-user-id` override plus `ALEITHIA_DEFAULT_USER_ID` fallback.
 - User profile/settings/query ownership now lives in `backend/`; do not reintroduce Modal-owned `/user/settings` routes or separate Modal settings storage.
 - If you touch `modal_app/api/routes/core.py`, verify the real emitted contract before adding status fields. `/status` should reflect active pipeline/GPU/cost reporting, not removed VectorDB health metadata.
+- `ENABLE_CCTV_ANALYSIS` is controlled through the Modal secret `alethia-secrets`. If you add or change CCTV env-gated behavior in Modal functions/classes, verify those functions/classes mount that secret before assuming the flag is available everywhere.
 - If you touch `modal_app/agents.py::regulatory_agent`, preserve the non-VectorDB path: concurrent live API fetches, dedup against cached volume docs, cached-freshness reporting, and live-result write-back.
 - When adding or renaming source/document fields, update downstream readers, ranking logic, and tests in the same change.
 - Avoid silent architectural cleanup outside scope. If you discover dead paths, stale messages, or inconsistencies, note them in your final response unless the task asked you to fix them.
