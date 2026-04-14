@@ -81,6 +81,9 @@ data/dedup/
 backend/test.db
 backend/test.db.backup
 
+# Claude
+.claude/
+
 # Markdown docs — only keep planning docs and CLAUDE.md
 *.md
 !AGENTS.md
