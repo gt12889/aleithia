@@ -22,6 +22,7 @@ export interface NeighborhoodMetrics {
   sentiment: number
   risk_score: number
   active_permits: number
+  crime_incidents_30d?: number
   news_mentions: number
   avg_review_rating: number
   review_count?: number

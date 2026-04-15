@@ -16,128 +16,176 @@ import time
 import types
 from pathlib import Path
 
-# ── 1. Create a temporary directory for volume paths ──────────────────────────
-_tmpdir = tempfile.mkdtemp(prefix="pipeline_test_")
 
-# Avoid importing full local discovery graph from modal_app.__init__.
-# For this harness we only need direct pipeline modules.
-os.environ.setdefault("MODAL_IS_REMOTE", "1")
-
-# ── 2. Build a fake `modal` module ────────────────────────────────────────────
-
-_modal = types.ModuleType("modal")
-
-# No-op decorator helpers
 def _identity(fn=None, **_kw):
     """Return fn unchanged, or return a decorator that does the same."""
     if fn is not None:
         return fn
     return lambda f: f
 
+
 def _identity_cls(cls=None, **_kw):
     if cls is not None:
         return cls
     return lambda c: c
 
+
 class _FakeImage:
     """Fluent builder that returns itself for every chained call."""
+
     def __getattr__(self, _name):
         return lambda *_a, **_kw: self
 
+
 class _FakeApp:
     """Fake modal.App — decorators are no-ops."""
-    def __init__(self, *_a, **_kw): pass
-    def function(self, fn=None, **_kw): return _identity(fn, **_kw)
-    def cls(self, cls=None, **_kw): return _identity_cls(cls, **_kw)
-    def local_entrypoint(self, fn=None, **_kw): return _identity(fn, **_kw)
+
+    def __init__(self, *_a, **_kw):
+        pass
+
+    def function(self, fn=None, **_kw):
+        return _identity(fn, **_kw)
+
+    def cls(self, cls=None, **_kw):
+        return _identity_cls(cls, **_kw)
+
+    def local_entrypoint(self, fn=None, **_kw):
+        return _identity(fn, **_kw)
+
 
 class _FakeVolume:
     @staticmethod
-    def from_name(*_a, **_kw): return _FakeVolume()
-    def commit(self): pass
-    def reload(self): pass
+    def from_name(*_a, **_kw):
+        return _FakeVolume()
+
+    def commit(self):
+        pass
+
+    def reload(self):
+        pass
+
 
 class _FakeQueue:
     @staticmethod
-    def from_name(*_a, **_kw): return _FakeQueue()
-    def put(self, *_a, **_kw): pass
-    def get(self, *_a, **_kw): return None
+    def from_name(*_a, **_kw):
+        return _FakeQueue()
+
+    def put(self, *_a, **_kw):
+        pass
+
+    def get(self, *_a, **_kw):
+        return None
+
 
 class _FakeSecret:
     @staticmethod
-    def from_name(*_a, **_kw): return _FakeSecret()
+    def from_name(*_a, **_kw):
+        return _FakeSecret()
 
-# Populate the fake modal module
-_modal.App = _FakeApp
-_modal.Volume = _FakeVolume
-_modal.Queue = _FakeQueue
-_modal.Secret = _FakeSecret
-_modal.Image = _FakeImage()
-_modal.enter = _identity
-_modal.exit = _identity
-_modal.method = _identity
-_modal.batched = _identity
-_modal.build = _identity
-_modal.web_endpoint = _identity
-_modal.asgi_app = _identity
-_modal.Period = lambda **_kw: None
-_modal.Retries = lambda *_a, **_kw: None
-_modal.Cron = lambda *_a, **_kw: None
-_modal.concurrent = _identity
 
 class _FakeDict:
     """Fake modal.Dict — in-memory dict with .from_name() constructor."""
+
     _store: dict = {}
+
     @staticmethod
-    def from_name(*_a, **_kw): return _FakeDict()
-    def __getitem__(self, key): return self._store[key]
-    def __setitem__(self, key, value): self._store[key] = value
-    def keys(self): return iter(self._store.keys())
-    def get(self, key): return self._store.get(key)
+    def from_name(*_a, **_kw):
+        return _FakeDict()
 
-_modal.Dict = _FakeDict
+    def __getitem__(self, key):
+        return self._store[key]
 
-sys.modules["modal"] = _modal
+    def __setitem__(self, key, value):
+        self._store[key] = value
 
-# ── 3. Mock modal_app.volume ──────────────────────────────────────────────────
-# We build a real-ish module so pipeline imports like
-#   from modal_app.volume import app, volume, base_image, RAW_DATA_PATH
-# all resolve.
+    def keys(self):
+        return iter(self._store.keys())
 
-_vol_mod = types.ModuleType("modal_app.volume")
-_vol_mod.app = _FakeApp("alethia")
-_vol_mod.volume = _FakeVolume()
-_vol_mod.weights_volume = _FakeVolume()
-_vol_mod.VOLUME_MOUNT = os.path.join(_tmpdir, "data")
-_vol_mod.WEIGHTS_MOUNT = os.path.join(_tmpdir, "weights")
-_vol_mod.RAW_DATA_PATH = os.path.join(_tmpdir, "data", "raw")
-_vol_mod.PROCESSED_DATA_PATH = os.path.join(_tmpdir, "data", "processed")
-_vol_mod.CACHE_PATH = os.path.join(_tmpdir, "data", "cache")
+    def get(self, key):
+        return self._store.get(key)
 
-# Image stubs
-for _img_name in (
-    "base_image", "reddit_image", "politics_image", "data_image",
-    "vllm_image", "classify_image", "web_image", "video_image",
-    "label_image", "yolo_image", "tiktok_image", "transcribe_image",
-):
-    setattr(_vol_mod, _img_name, _FakeImage())
 
-sys.modules["modal_app.volume"] = _vol_mod
+def _bootstrap_fake_modal_environment() -> None:
+    tmpdir = tempfile.mkdtemp(prefix="pipeline_test_")
 
-# ── 4. Mock modal_app.classify ────────────────────────────────────────────────
-_cls_mod = types.ModuleType("modal_app.classify")
-_cls_mod.doc_queue = _FakeQueue()
-sys.modules["modal_app.classify"] = _cls_mod
+    # Avoid importing full local discovery graph from modal_app.__init__.
+    # For this harness we only need direct pipeline modules.
+    os.environ.setdefault("MODAL_IS_REMOTE", "1")
 
-# ── 5. Ensure temp dirs exist for dedup / fallback / raw data ─────────────────
-for _sub in ("data/raw", "data/cache", "data/dedup", "data/processed"):
-    Path(os.path.join(_tmpdir, _sub)).mkdir(parents=True, exist_ok=True)
+    modal_module = types.ModuleType("modal")
+    modal_module.App = _FakeApp
+    modal_module.Volume = _FakeVolume
+    modal_module.Queue = _FakeQueue
+    modal_module.Secret = _FakeSecret
+    modal_module.Image = _FakeImage()
+    modal_module.enter = _identity
+    modal_module.exit = _identity
+    modal_module.method = _identity
+    modal_module.batched = _identity
+    modal_module.build = _identity
+    modal_module.web_endpoint = _identity
+    modal_module.asgi_app = _identity
+    modal_module.Period = lambda **_kw: None
+    modal_module.Retries = lambda *_a, **_kw: None
+    modal_module.Cron = lambda *_a, **_kw: None
+    modal_module.concurrent = _identity
+    modal_module.Dict = _FakeDict
+    sys.modules["modal"] = modal_module
 
-# ── 6. Now import pipeline code ──────────────────────────────────────────────
-from modal_app.pipelines import news, reddit, politics, public_data  # noqa: E402
-from modal_app.pipelines import demographics, federal_register        # noqa: E402
-from modal_app.pipelines import realestate, reviews                   # noqa: E402
-from modal_app.pipelines import cctv, traffic                         # noqa: E402
+    vol_mod = types.ModuleType("modal_app.volume")
+    vol_mod.app = _FakeApp("alethia")
+    vol_mod.volume = _FakeVolume()
+    vol_mod.weights_volume = _FakeVolume()
+    vol_mod.VOLUME_MOUNT = os.path.join(tmpdir, "data")
+    vol_mod.WEIGHTS_MOUNT = os.path.join(tmpdir, "weights")
+    vol_mod.RAW_DATA_PATH = os.path.join(tmpdir, "data", "raw")
+    vol_mod.PROCESSED_DATA_PATH = os.path.join(tmpdir, "data", "processed")
+    vol_mod.CACHE_PATH = os.path.join(tmpdir, "data", "cache")
+
+    for image_name in (
+        "base_image",
+        "reddit_image",
+        "politics_image",
+        "data_image",
+        "vllm_image",
+        "classify_image",
+        "web_image",
+        "video_image",
+        "label_image",
+        "yolo_image",
+        "tiktok_image",
+        "transcribe_image",
+    ):
+        setattr(vol_mod, image_name, _FakeImage())
+
+    sys.modules["modal_app.volume"] = vol_mod
+
+    cls_mod = types.ModuleType("modal_app.classify")
+    cls_mod.doc_queue = _FakeQueue()
+    sys.modules["modal_app.classify"] = cls_mod
+
+    for subdir in ("data/raw", "data/cache", "data/dedup", "data/processed"):
+        Path(os.path.join(tmpdir, subdir)).mkdir(parents=True, exist_ok=True)
+
+
+def _load_pipeline_modules():
+    from modal_app.pipelines import news, reddit, politics, public_data
+    from modal_app.pipelines import demographics, federal_register
+    from modal_app.pipelines import realestate, reviews
+    from modal_app.pipelines import cctv, traffic
+
+    return {
+        "news": news,
+        "reddit": reddit,
+        "politics": politics,
+        "public_data": public_data,
+        "demographics": demographics,
+        "federal_register": federal_register,
+        "realestate": realestate,
+        "reviews": reviews,
+        "cctv": cctv,
+        "traffic": traffic,
+    }
 
 # ── Reporting helpers ─────────────────────────────────────────────────────────
 
@@ -185,6 +233,18 @@ def _report(label: str, docs: list[dict] | None, elapsed: float, error: str = ""
 # ── Pipeline runners ──────────────────────────────────────────────────────────
 
 async def run_all():
+    modules = _load_pipeline_modules()
+    news = modules["news"]
+    reddit = modules["reddit"]
+    politics = modules["politics"]
+    public_data = modules["public_data"]
+    demographics = modules["demographics"]
+    federal_register = modules["federal_register"]
+    realestate = modules["realestate"]
+    reviews = modules["reviews"]
+    cctv = modules["cctv"]
+    traffic = modules["traffic"]
+
     results: list[tuple[str, list[dict] | None, float, str]] = []
 
     async def _run(label: str, coro_fn, *args):
@@ -260,4 +320,5 @@ async def run_all():
 
 
 if __name__ == "__main__":
+    _bootstrap_fake_modal_environment()
     asyncio.run(run_all())
