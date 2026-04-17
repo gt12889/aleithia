@@ -446,21 +446,7 @@ export default function Dashboard({ profile, onReset, onProfileUpdate, initialPr
     { key: 'vision', label: 'Vision', count: neighborhoodData?.cctv?.cameras.length || 0, isEmpty: () => false },
     { key: 'evidence', label: 'Evidence', count: evidenceCount, isEmpty: () => !evidenceCount },
   ]
-  const tabs = useMemo(
-    () => allTabs.filter(t => !t.isEmpty || !(t.isEmpty?.() ?? false)),
-    [
-      neighborhoodData?.inspection_stats.total,
-      neighborhoodData?.permit_count,
-      neighborhoodData?.license_count,
-      neighborhoodData?.news.length,
-      neighborhoodData?.politics.length,
-      neighborhoodData?.reddit?.length,
-      neighborhoodData?.tiktok?.length,
-      neighborhoodData?.reviews?.length,
-      neighborhoodData?.realestate?.length,
-      neighborhoodData?.cctv?.cameras.length,
-    ]
-  )
+  const tabs = allTabs.filter(t => !t.isEmpty || !(t.isEmpty?.() ?? false))
   const visibleTabKeys = useMemo(() => tabs.map(t => t.key), [tabs])
 
   useEffect(() => {
@@ -1117,9 +1103,34 @@ interface PreviewRowProps {
 }
 
 function OverviewPreviewRow({ data, onTabChange }: PreviewRowProps) {
-  const newsItems = (data.news || []).slice(0, 3)
+  const newsItems = [
+    ...(data.news || []).map((item) => ({
+      title: item.title,
+      meta: item.source || 'news',
+    })),
+    ...(data.politics || []).map((item) => ({
+      title: item.title,
+      meta: (item.metadata?.matter_type as string) || 'policy',
+    })),
+    ...(data.federal_register || []).map((item) => ({
+      title: item.title,
+      meta: (item.metadata?.agency as string) || 'federal',
+    })),
+  ].slice(0, 3)
   const communityItems = [...(data.reddit || []), ...(data.tiktok || [])].slice(0, 3)
-  const marketItems = (data.reviews || []).slice(0, 3)
+  const marketItems = [
+    ...(data.reviews || []).map((review) => ({
+      title: review.title,
+      meta: review.metadata?.rating ? `${review.metadata.rating}/5 · ${review.metadata.review_count || 0} reviews` : 'review',
+    })),
+    ...(data.realestate || []).map((listing) => ({
+      title: listing.title,
+      meta: [
+        listing.metadata?.listing_type as string | undefined,
+        listing.metadata?.price as string | undefined,
+      ].filter(Boolean).join(' · ') || 'listing',
+    })),
+  ].slice(0, 3)
   const hasAny = newsItems.length > 0 || communityItems.length > 0 || marketItems.length > 0
   if (!hasAny) return null
 
@@ -1129,9 +1140,9 @@ function OverviewPreviewRow({ data, onTabChange }: PreviewRowProps) {
         title="Local Intelligence"
         accent="text-blue-300/70"
         dot="bg-blue-400/70"
-        count={data.news?.length || 0}
+        count={(data.news?.length || 0) + (data.politics?.length || 0) + (data.federal_register?.length || 0)}
         onClick={() => onTabChange('intel')}
-        items={newsItems.map(n => ({ title: n.title, meta: n.source || 'news' }))}
+        items={newsItems}
         emptyMsg="No recent news signals"
       />
       <PreviewPanel
@@ -1150,12 +1161,9 @@ function OverviewPreviewRow({ data, onTabChange }: PreviewRowProps) {
         title="Market Snapshot"
         accent="text-cyan-300/70"
         dot="bg-cyan-400/70"
-        count={data.reviews?.length || 0}
+        count={(data.reviews?.length || 0) + (data.realestate?.length || 0)}
         onClick={() => onTabChange('market')}
-        items={marketItems.map(m => ({
-          title: m.title,
-          meta: m.metadata?.rating ? `${m.metadata.rating}/5 · ${m.metadata.review_count || 0} reviews` : 'listing',
-        }))}
+        items={marketItems}
         emptyMsg="No market data"
       />
     </div>

@@ -91,18 +91,40 @@ function CategoryBar({ cat, onViewAll }: { cat: CategoryScore; onViewAll?: () =>
 
 export default function CommandPanel({ data, profile, riskScore, onTabChange }: Props) {
   const [riskProfile, setRiskProfile] = useState<RiskProfile>('conservative')
-  const [streetscape, setStreetscape] = useState<StreetscapeData | null>(null)
+  const [streetscape, setStreetscape] = useState<{ neighborhood: string; data: StreetscapeData | null } | null>(null)
 
   useEffect(() => {
     if (!profile.neighborhood) return
+
+    let cancelled = false
     api.streetscape(profile.neighborhood)
-      .then(d => setStreetscape(d.counts ? d as StreetscapeData : null))
-      .catch(() => setStreetscape(null))
+      .then(d => {
+        if (!cancelled) {
+          setStreetscape({
+            neighborhood: profile.neighborhood,
+            data: d.counts ? d as StreetscapeData : null,
+          })
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setStreetscape({
+            neighborhood: profile.neighborhood,
+            data: null,
+          })
+        }
+      })
+
+    return () => {
+      cancelled = true
+    }
   }, [profile.neighborhood])
 
+  const streetscapeForProfile = streetscape?.neighborhood === profile.neighborhood ? streetscape.data : null
+
   const insights = useMemo(
-    () => computeInsights(data, profile, riskProfile, streetscape),
-    [data, profile, riskProfile, streetscape],
+    () => computeInsights(data, profile, riskProfile, streetscapeForProfile),
+    [data, profile, riskProfile, streetscapeForProfile],
   )
 
   const positives = useMemo(() => {
