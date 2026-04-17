@@ -91,7 +91,7 @@ function extractAllAdvantages(data: NeighborhoodData, profile: UserProfile): Sig
     }
   }
 
-  const insights = computeInsights(data, profile, 'conservative')
+  const insights = computeInsights(data, profile)
   for (const cat of insights.categories) {
     if (cat.score >= 65 && !signals.some(s => s.title.toLowerCase().includes(cat.name.toLowerCase()))) {
       signals.push({
@@ -188,7 +188,7 @@ function extractAllRisks(data: NeighborhoodData, profile: UserProfile): Signal[]
     })
   }
 
-  const insights = computeInsights(data, profile, 'conservative')
+  const insights = computeInsights(data, profile)
   for (const cat of insights.categories) {
     if (cat.score < 40 && !signals.some(s => s.title.toLowerCase().includes(cat.name.toLowerCase()))) {
       signals.push({
@@ -422,7 +422,7 @@ export default function LocationReportPanel({ profile, neighborhoodData, loading
   }, [profile.neighborhood, profile.business_type])
 
   const insights = neighborhoodData
-    ? computeInsights(neighborhoodData, profile, 'conservative')
+    ? computeInsights(neighborhoodData, profile)
     : null
 
   const advantages = neighborhoodData ? extractAllAdvantages(neighborhoodData, profile) : []

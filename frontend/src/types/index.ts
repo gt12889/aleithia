@@ -262,7 +262,7 @@ export interface DataSources {
 }
 
 export type InsightSignal = 'positive' | 'neutral' | 'negative'
-export type RiskProfile = 'conservative' | 'growth' | 'budget'
+export type RiskProfile = 'balanced'
 
 export interface SubMetric {
   name: string

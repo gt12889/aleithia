@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo } from 'react'
-import type { NeighborhoodData, UserProfile, RiskScore, RiskProfile, CategoryScore, StreetscapeData } from '../types/index.ts'
+import type { NeighborhoodData, UserProfile, RiskScore, CategoryScore, StreetscapeData } from '../types/index.ts'
 import { computeInsights } from '../insights.ts'
 import { api } from '../api.ts'
 
@@ -18,12 +18,6 @@ const CATEGORY_TAB_MAP: Record<string, string> = {
   safety: 'vision',
   community: 'community',
 }
-
-const PROFILES: { key: RiskProfile; label: string; desc: string }[] = [
-  { key: 'conservative', label: 'Conservative', desc: 'Weighs regulatory compliance & safety highest' },
-  { key: 'growth', label: 'Growth', desc: 'Weighs economic & market signals highest' },
-  { key: 'budget', label: 'Budget', desc: 'Weighs affordability & community highest' },
-]
 
 function riskColor(score: number): string {
   if (score <= 3) return 'text-emerald-400'
@@ -90,7 +84,6 @@ function CategoryBar({ cat, onViewAll }: { cat: CategoryScore; onViewAll?: () =>
 }
 
 export default function CommandPanel({ data, profile, riskScore, onTabChange }: Props) {
-  const [riskProfile, setRiskProfile] = useState<RiskProfile>('conservative')
   const [streetscape, setStreetscape] = useState<{ neighborhood: string; data: StreetscapeData | null } | null>(null)
 
   useEffect(() => {
@@ -123,8 +116,8 @@ export default function CommandPanel({ data, profile, riskScore, onTabChange }: 
   const streetscapeForProfile = streetscape?.neighborhood === profile.neighborhood ? streetscape.data : null
 
   const insights = useMemo(
-    () => computeInsights(data, profile, riskProfile, streetscapeForProfile),
-    [data, profile, riskProfile, streetscapeForProfile],
+    () => computeInsights(data, profile, 'balanced', streetscapeForProfile),
+    [data, profile, streetscapeForProfile],
   )
 
   const positives = useMemo(() => {
@@ -173,23 +166,6 @@ export default function CommandPanel({ data, profile, riskScore, onTabChange }: 
             <span className="text-white/15">·</span>
             <p className="text-[11px] text-white/50 truncate">{riskScore.business_type}</p>
           </div>
-        </div>
-        <div className="flex gap-0 border border-white/[0.08] overflow-hidden">
-          {PROFILES.map(p => (
-            <button
-              key={p.key}
-              type="button"
-              title={p.desc}
-              onClick={() => setRiskProfile(p.key)}
-              className={`px-2.5 py-1 text-[9px] font-mono uppercase tracking-wider transition-colors cursor-pointer ${
-                riskProfile === p.key
-                  ? 'bg-white/[0.08] text-white'
-                  : 'text-white/30 hover:text-white/60'
-              }`}
-            >
-              {p.label}
-            </button>
-          ))}
         </div>
       </div>
 

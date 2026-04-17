@@ -10,17 +10,13 @@ import type {
 } from './types/index.ts'
 
 const WEIGHTS: Record<RiskProfile, Record<string, number>> = {
-  conservative: {
-    regulatory: 0.25, economic: 0.10, market: 0.15,
-    demographic: 0.15, safety: 0.25, community: 0.10,
-  },
-  growth: {
-    regulatory: 0.10, economic: 0.25, market: 0.25,
-    demographic: 0.10, safety: 0.10, community: 0.20,
-  },
-  budget: {
-    regulatory: 0.15, economic: 0.15, market: 0.15,
-    demographic: 0.25, safety: 0.10, community: 0.20,
+  balanced: {
+    regulatory: 1 / 6,
+    economic: 1 / 6,
+    market: 1 / 6,
+    demographic: 1 / 6,
+    safety: 1 / 6,
+    community: 1 / 6,
   },
 }
 
@@ -413,7 +409,7 @@ function computeWLS(categories: CategoryScore[], profile: RiskProfile): number {
 export function computeInsights(
   data: NeighborhoodData,
   profile: UserProfile,
-  riskProfile: RiskProfile,
+  riskProfile: RiskProfile = 'balanced',
   streetscape?: StreetscapeData | null,
 ): InsightsResult {
   const scorers = [
