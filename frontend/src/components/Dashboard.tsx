@@ -1,8 +1,7 @@
-import { useState, useEffect, useMemo, useRef, useCallback } from 'react'
+import { useState, useEffect, useMemo, useRef } from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
 import type { UserProfile, NeighborhoodData, DataSources, RiskScore, CCTVData, ParkingData } from '../types/index.ts'
 import { api, API_BASE, BACKEND_API_BASE, fetchTrends, type TrendData } from '../api.ts'
-import MapView from './MapView.tsx'
 import Timer from './Timer.tsx'
 import InspectionTable from './InspectionTable.tsx'
 import PermitTable from './PermitTable.tsx'
@@ -10,14 +9,12 @@ import LicenseTable from './LicenseTable.tsx'
 import NewsFeed from './NewsFeed.tsx'
 import CommunityFeed from './CommunityFeed.tsx'
 import MarketPanel from './MarketPanel.tsx'
-import DemographicsCard from './DemographicsCard.tsx'
 import PipelineMonitor from './PipelineMonitor.tsx'
 // import MLMonitor from './MLMonitor.tsx' // temporarily hidden — re-enable with Models tab
 import CCTVCameraCard from './CCTVCameraCard.tsx'
 import CCTVCameraDrawer from './CCTVCameraDrawer.tsx'
-import CommandPanel from './CommandPanel.tsx'
 import CityGraph from './CityGraph.tsx'
-import LocationReportPanel from './LocationReportPanel.tsx'
+import OverviewTab from './OverviewTab.tsx'
 import FootTrafficChart from './FootTrafficChart.tsx'
 import StreetscapeCard from './StreetscapeCard.tsx'
 // import RecursiveAgentPanel from './RecursiveAgentPanel.tsx' // temporarily hidden — re-enable with Models tab
@@ -28,18 +25,6 @@ import { InspectionOutcomesChart, TopViolationsPareto, AlertHoursStackedArea } f
 import { dedupeNews, dedupePolicy } from '../feedDedup.ts'
 
 type Tab = 'overview' | 'regulatory' | 'intel' | 'community' | 'market' | 'vision' | 'evidence'
-
-interface ReportAgentInfo {
-  agents_deployed: number
-  neighborhoods: string[]
-  data_points: number
-  agent_summaries: Array<{
-    name: string
-    data_points: number
-    sources?: string[]
-    error?: boolean
-  }>
-}
 
 /**
  * Multi-Criteria Risk Assessment using Weighted Linear Combination (WLC).
@@ -289,42 +274,7 @@ export default function Dashboard({ profile, onReset, onProfileUpdate, initialPr
   const [activeTab, setActiveTab] = useState<Tab>('overview')
   const [trends, setTrends] = useState<TrendData | null>(null)
 
-  // Resizable sidebar
-  const SIDEBAR_DEFAULT = 540
-  const SIDEBAR_MIN = 360
-  const SIDEBAR_MAX = 720
-  const [sidebarWidth, setSidebarWidth] = useState(SIDEBAR_DEFAULT)
-  const isDragging = useRef(false)
-  const startX = useRef(0)
-  const startWidth = useRef(SIDEBAR_DEFAULT)
   const sourcesRetryTimeoutRef = useRef<number | null>(null)
-
-  const onDragStart = useCallback((e: React.MouseEvent) => {
-    e.preventDefault()
-    isDragging.current = true
-    startX.current = e.clientX
-    startWidth.current = sidebarWidth
-    document.body.style.cursor = 'col-resize'
-    document.body.style.userSelect = 'none'
-
-    const onMouseMove = (ev: MouseEvent) => {
-      if (!isDragging.current) return
-      const delta = startX.current - ev.clientX // dragging left = wider sidebar
-      const newWidth = Math.min(SIDEBAR_MAX, Math.max(SIDEBAR_MIN, startWidth.current + delta))
-      setSidebarWidth(newWidth)
-    }
-
-    const onMouseUp = () => {
-      isDragging.current = false
-      document.body.style.cursor = ''
-      document.body.style.userSelect = ''
-      document.removeEventListener('mousemove', onMouseMove)
-      document.removeEventListener('mouseup', onMouseUp)
-    }
-
-    document.addEventListener('mousemove', onMouseMove)
-    document.addEventListener('mouseup', onMouseUp)
-  }, [sidebarWidth])
 
   const refreshData = async () => {
     const toErrorMessage = (value: unknown) =>
@@ -400,42 +350,6 @@ export default function Dashboard({ profile, onReset, onProfileUpdate, initialPr
         active: info.active,
       }))
     : []
-
-  const reportAgentInfo = useMemo<ReportAgentInfo | null>(() => {
-    if (!sources) return null
-
-    const entries = (Object.entries(sources) as Array<[string, { count: number; active: boolean }]>)
-      .map(([name, info]) => ({ name, count: info.count, active: info.active }))
-      .filter(s => s.active)
-
-    const dataPointsFromSources = entries.reduce((sum, entry) => sum + entry.count, 0)
-    const neighborhoodPoints = neighborhoodData
-      ? neighborhoodData.inspection_stats.total +
-        neighborhoodData.permit_count +
-        neighborhoodData.license_count +
-        neighborhoodData.news.length +
-        neighborhoodData.politics.length +
-        (neighborhoodData.reddit?.length || 0) +
-        (neighborhoodData.tiktok?.length || 0) +
-        (neighborhoodData.reviews?.length || 0) +
-        (neighborhoodData.realestate?.length || 0) +
-        (neighborhoodData.traffic?.length || 0)
-      : 0
-
-    return {
-      agents_deployed: entries.length,
-      neighborhoods: [profile.neighborhood],
-      data_points: Math.max(dataPointsFromSources, neighborhoodPoints),
-      agent_summaries: entries
-        .sort((a, b) => b.count - a.count)
-        .slice(0, 6)
-        .map(entry => ({
-          name: entry.name.replaceAll('_', ' '),
-          data_points: entry.count,
-          sources: [entry.name],
-        })),
-    }
-  }, [sources, neighborhoodData, profile.neighborhood])
 
   const regulatoryCount = (neighborhoodData?.inspection_stats.total || 0) + (neighborhoodData?.permit_count || 0) + (neighborhoodData?.license_count || 0)
   const intelCount = neighborhoodData
@@ -551,9 +465,8 @@ export default function Dashboard({ profile, onReset, onProfileUpdate, initialPr
       )}
 
       {/* Main content */}
-      <div className="flex-1 flex min-h-0">
-        {/* Left: Data */}
-        <div className="flex-1 flex flex-col p-4 gap-4 overflow-y-auto">
+      <div className="flex-1 min-h-0 overflow-y-auto">
+        <div className="flex flex-col p-4 gap-4">
           {/* Pipeline Monitor - hidden diagnostics toggled from Session */}
           {showPipelineMonitor && (
             <PipelineMonitor
@@ -595,53 +508,14 @@ export default function Dashboard({ profile, onReset, onProfileUpdate, initialPr
             <LoadingFlow neighborhood={profile.neighborhood} />
           ) : (
             <>
-              {activeTab === 'overview' && trends?.congestion.anomalies && trends.congestion.anomalies.length > 0 && (
-                <div className="border border-red-500/20 bg-red-500/[0.04] px-4 py-3 flex items-center gap-3">
-                  <span className="text-red-400 text-xs font-mono font-bold">ALERT</span>
-                  <span className="text-xs text-white/50">
-                    {trends.congestion.anomalies.length} traffic anomal{trends.congestion.anomalies.length === 1 ? 'y' : 'ies'} detected:
-                    {' '}{trends.congestion.anomalies.map(a => a.road).join(', ')}
-                  </span>
-                </div>
-              )}
-
               {activeTab === 'overview' && (
-                <div className="space-y-4">
-                  {/* Map hero (left) + Unified Command Panel (right) */}
-                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-                    <div className="h-[620px] min-h-0">
-                      <MapView activeNeighborhood={profile.neighborhood} />
-                    </div>
-
-                    <div className="h-[620px] min-h-0">
-                      {riskScore && neighborhoodData ? (
-                        <CommandPanel
-                          data={neighborhoodData}
-                          profile={profile}
-                          riskScore={riskScore}
-                          onTabChange={(tab) => setActiveTab(tab as Tab)}
-                        />
-                      ) : (
-                        <div className="h-full flex items-center justify-center border border-white/[0.06] bg-white/[0.01]">
-                          <span className="text-[10px] font-mono text-white/20">Loading command panel</span>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-
-                  {/* Evidence preview row (Phase 2e) */}
-                  {neighborhoodData && (
-                    <OverviewPreviewRow
-                      data={neighborhoodData}
-                      onTabChange={(tab) => setActiveTab(tab as Tab)}
-                    />
-                  )}
-
-                  {/* Bottom tactical stats strip */}
-                  {neighborhoodData?.metrics && (
-                    <DemographicsCard metrics={neighborhoodData.metrics} demographics={neighborhoodData.demographics} horizontal />
-                  )}
-                </div>
+                <OverviewTab
+                  profile={profile}
+                  neighborhoodData={neighborhoodData}
+                  riskScore={riskScore}
+                  trends={trends}
+                  onTabChange={(tab) => setActiveTab(tab as Tab)}
+                />
               )}
 
               {activeTab === 'regulatory' && neighborhoodData && (
@@ -692,26 +566,6 @@ export default function Dashboard({ profile, onReset, onProfileUpdate, initialPr
               */}
             </>
           )}
-        </div>
-
-        {/* Right: Resizable Report Sidebar */}
-        <div className="relative shrink-0 flex" style={{ width: sidebarWidth }}>
-          {/* Drag handle */}
-          <div
-            onMouseDown={onDragStart}
-            className="absolute left-0 top-0 bottom-0 w-1.5 z-10 cursor-col-resize group hover:bg-[#2B95D6]/30 transition-colors"
-          >
-            <div className="absolute left-0 top-0 bottom-0 w-0.5 bg-[#2B95D6]/40 group-hover:bg-[#2B95D6]/80 transition-colors" />
-          </div>
-          <div className="flex-1 p-4 overflow-y-auto" style={{ boxShadow: '-4px 0 24px rgba(43, 149, 214, 0.08)' }}>
-            <LocationReportPanel
-              profile={profile}
-              neighborhoodData={neighborhoodData}
-              riskScore={riskScore}
-              loading={loading}
-              agentInfo={reportAgentInfo}
-            />
-          </div>
         </div>
       </div>
 
@@ -1120,119 +974,6 @@ function RegulatorySubTabs({ neighborhoodData }: { neighborhoodData: Neighborhoo
 // Overview preview row: compact peek into news / community / market
 // with drill-down to the full tab.
 // ────────────────────────────────────────────────────────────────────
-
-interface PreviewRowProps {
-  data: NeighborhoodData
-  onTabChange: (tab: string) => void
-}
-
-function OverviewPreviewRow({ data, onTabChange }: PreviewRowProps) {
-  const newsItems = [
-    ...(data.news || []).map((item) => ({
-      title: item.title,
-      meta: item.source || 'news',
-    })),
-    ...(data.politics || []).map((item) => ({
-      title: item.title,
-      meta: (item.metadata?.matter_type as string) || 'policy',
-    })),
-    ...(data.federal_register || []).map((item) => ({
-      title: item.title,
-      meta: (item.metadata?.agency as string) || 'federal',
-    })),
-  ].slice(0, 3)
-  const communityItems = [...(data.reddit || []), ...(data.tiktok || [])].slice(0, 3)
-  const marketItems = [
-    ...(data.reviews || []).map((review) => ({
-      title: review.title,
-      meta: review.metadata?.rating ? `${review.metadata.rating}/5 · ${review.metadata.review_count || 0} reviews` : 'review',
-    })),
-    ...(data.realestate || []).map((listing) => ({
-      title: listing.title,
-      meta: [
-        listing.metadata?.listing_type as string | undefined,
-        listing.metadata?.price as string | undefined,
-      ].filter(Boolean).join(' · ') || 'listing',
-    })),
-  ].slice(0, 3)
-  const hasAny = newsItems.length > 0 || communityItems.length > 0 || marketItems.length > 0
-  if (!hasAny) return null
-
-  return (
-    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-      <PreviewPanel
-        title="Local Intelligence"
-        accent="text-blue-300/70"
-        dot="bg-blue-400/70"
-        count={(data.news?.length || 0) + (data.politics?.length || 0) + (data.federal_register?.length || 0)}
-        onClick={() => onTabChange('intel')}
-        items={newsItems}
-        emptyMsg="No recent news signals"
-      />
-      <PreviewPanel
-        title="Community Pulse"
-        accent="text-green-300/70"
-        dot="bg-green-400/70"
-        count={(data.reddit?.length || 0) + (data.tiktok?.length || 0)}
-        onClick={() => onTabChange('community')}
-        items={communityItems.map(c => ({
-          title: c.title,
-          meta: (c.metadata?.subreddit as string) ? `r/${c.metadata?.subreddit}` : (c.metadata?.creator as string) ? `@${c.metadata?.creator}` : 'social',
-        }))}
-        emptyMsg="No community chatter"
-      />
-      <PreviewPanel
-        title="Market Snapshot"
-        accent="text-cyan-300/70"
-        dot="bg-cyan-400/70"
-        count={(data.reviews?.length || 0) + (data.realestate?.length || 0)}
-        onClick={() => onTabChange('market')}
-        items={marketItems}
-        emptyMsg="No market data"
-      />
-    </div>
-  )
-}
-
-interface PreviewPanelProps {
-  title: string
-  accent: string
-  dot: string
-  count: number
-  onClick: () => void
-  items: Array<{ title: string; meta: string }>
-  emptyMsg: string
-}
-
-function PreviewPanel({ title, accent, dot, count, onClick, items, emptyMsg }: PreviewPanelProps) {
-  return (
-    <button
-      onClick={onClick}
-      className="flex flex-col text-left border border-white/[0.06] bg-white/[0.01] hover:border-white/[0.12] hover:bg-white/[0.02] transition-all cursor-pointer group"
-    >
-      <div className="flex h-8 items-center justify-between px-4 border-b border-white/[0.04]">
-        <div className="flex items-center gap-2">
-          <span className={`w-1 h-1 rounded-full ${dot}`} />
-          <span className={`text-[10px] font-mono uppercase tracking-wider leading-none ${accent}`}>{title}</span>
-        </div>
-        <div className="flex items-center gap-2">
-          <span className="text-[10px] font-mono text-white/25 leading-none">{count}</span>
-          <span className="text-[10px] text-white/25 leading-none group-hover:text-white/60 transition-colors">›</span>
-        </div>
-      </div>
-      <div className="p-3 space-y-2 min-h-[130px]">
-        {items.length > 0 ? items.map((item, i) => (
-          <div key={i} className="text-[11px] leading-snug">
-            <div className="text-white/75 line-clamp-2 group-hover:text-white/90 transition-colors">{item.title}</div>
-            <div className="text-[9px] font-mono uppercase tracking-wider text-white/25 mt-0.5">{item.meta}</div>
-          </div>
-        )) : (
-          <div className="text-[10px] font-mono text-white/20 flex items-center justify-center h-full">{emptyMsg}</div>
-        )}
-      </div>
-    </button>
-  )
-}
 
 // ────────────────────────────────────────────────────────────────────
 // Evidence Explorer — cross-source investigation workspace.
